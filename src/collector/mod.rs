@@ -6,6 +6,7 @@ use rayon::prelude::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::io::Write;
 use crate::local::LocalExecutor;
 pub use types::*;
 
@@ -193,7 +194,10 @@ impl Collector {
             })
             .collect();
 
-        info!("共发现 {} 个进程", processes.len());
+        let total_count = processes.len();
+        info!("共发现 {} 个进程", total_count);
+
+        let progress = Arc::new(Mutex::new(0));
 
         // 并行处理所有进程
         let processed_processes: HashMap<i32, ProcessInfo> = processes.par_iter()
@@ -205,18 +209,41 @@ impl Collector {
                    name.starts_with("ksoftirqd") ||
                    name.starts_with("scsi_") ||
                    name.starts_with("kthread") {
-                    let mut count = skipped_count.lock().unwrap();
-                    *count += 1;
-                    debug!("跳过系统进程: {} (PID: {})", name, pid);
+                    {
+                        let mut count = skipped_count.lock().unwrap();
+                        *count += 1;
+                        let mut current = progress.lock().unwrap();
+                        *current += 1;
+                        if *current % 10 == 0 || *current == total_count {
+                            print!("\r进度: {}/{}  ({:.1}%)    ", *current, total_count, (*current as f64 / total_count as f64) * 100.0);
+                            std::io::stdout().flush().unwrap();
+                        }
+                        debug!("跳过系统进程: {} (PID: {})", name, pid);
+                    }
                     None
                 } else {
                     let executor_clone = executor.clone();
+                    let progress_clone = progress.clone();
                     match self.collect_process_info_parallel(*pid, executor_clone) {
                         Ok(info) => {
+                            let mut current = progress_clone.lock().unwrap();
+                            *current += 1;
+                            if *current % 10 == 0 || *current == total_count {
+                                print!("\r进度: {}/{}  ({:.1}%)    ", *current, total_count, (*current as f64 / total_count as f64) * 100.0);
+                                std::io::stdout().flush().unwrap();
+                            }
                             debug!("成功收集进程信息 PID: {}", pid);
                             Some((*pid, info))
                         }
                         Err(e) => {
+                            {
+                                let mut current = progress_clone.lock().unwrap();
+                                *current += 1;
+                                if *current % 10 == 0 || *current == total_count {
+                                    print!("\r进度: {}/{}  ({:.1}%)    ", *current, total_count, (*current as f64 / total_count as f64) * 100.0);
+                                    std::io::stdout().flush().unwrap();
+                                }
+                            }
                             debug!("收集进程 {} 信息失败: {}", pid, e);
                             None
                         }
