@@ -5,3 +5,10 @@ Cargo.lock
 !/reports/.gitkeep
 /logs/*
 !/logs/.gitkeep
+
+# Test output files
+diff_report*.json
+diff_report*.md
+process_memory_changes.csv
+test[0-9]*/
+
