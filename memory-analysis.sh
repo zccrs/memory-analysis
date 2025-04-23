@@ -24,16 +24,30 @@ SSH_CONTROL_PATH="/tmp/ssh-memory-analysis-$$.socket"
 
 # 清理函数
 cleanup() {
+    # 终止远程进程
+    if [ -n "$REMOTE_PID" ]; then
+        ssh -o "ControlPath=$SSH_CONTROL_PATH" "$REMOTE_HOST" "sudo kill -TERM $REMOTE_PID" 2>/dev/null
+    fi
     # 清理远程临时目录
     ssh -o "ControlPath=$SSH_CONTROL_PATH" "$REMOTE_HOST" "rm -rf $REMOTE_TEMP_DIR" 2>/dev/null
     # 关闭SSH主连接
     ssh -O exit -o "ControlPath=$SSH_CONTROL_PATH" "$REMOTE_HOST" 2>/dev/null
     # 删除控制socket
     rm -f "$SSH_CONTROL_PATH"
+    # 恢复终端状态
+    stty sane 2>/dev/null || true
+}
+
+# 信号处理函数
+handle_interrupt() {
+    echo -e "\n收到中断信号，正在清理..."
+    cleanup
+    exit 1
 }
 
 # 设置清理钩子
 trap cleanup EXIT
+trap handle_interrupt INT TERM
 
 # 确保本地结果目录存在
 mkdir -p "$LOCAL_RESULT_DIR"
@@ -62,7 +76,7 @@ scp -o "ControlPath=$SSH_CONTROL_PATH" "./target/x86_64-unknown-linux-gnu/releas
 }
 
 echo "Step 4: 在远程主机上执行程序..."
-ssh -t -o "ControlPath=$SSH_CONTROL_PATH" "$REMOTE_HOST" "cd $REMOTE_TEMP_DIR && chmod +x $BINARY_NAME && sudo ./$BINARY_NAME ." || {
+ssh -tt -o "ControlPath=$SSH_CONTROL_PATH" "$REMOTE_HOST" "cd $REMOTE_TEMP_DIR && chmod +x $BINARY_NAME && sudo ./$BINARY_NAME . & REMOTE_PID=\$! && wait \$REMOTE_PID" || {
     echo "错误: 远程执行失败"
     ssh "$REMOTE_HOST" "rm -rf $REMOTE_TEMP_DIR"
     exit 1
