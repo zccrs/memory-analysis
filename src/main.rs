@@ -21,9 +21,20 @@ async fn main() {
     let args = Args::parse_args();
 
     // 初始化日志系统
-    env_logger::Builder::from_env(Env::default().default_filter_or(&args.log_level))
+    env_logger::Builder::new()
+        .filter_level(match args.log_level.as_str() {
+            "debug" => log::LevelFilter::Debug,
+            "info" => log::LevelFilter::Info,
+            "warn" => log::LevelFilter::Warn,
+            "error" => log::LevelFilter::Error,
+            _ => log::LevelFilter::Info,
+        })
         .format_timestamp(None)
+        .format_module_path(false)
+        .format_target(false)
         .init();
+
+    info!("日志系统初始化完成，级别: {}", args.log_level);
 
     if let Err(e) = run(args) {
         error!("{:#}", e);

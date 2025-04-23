@@ -17,3 +17,4 @@ tokio = { version = "1.35", features = ["full"] }
 chrono = { version = "0.4", features = ["serde"] }
 byte-unit = "4.0"
 rpassword = "7.0"
+rayon = "1.8"

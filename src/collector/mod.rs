@@ -2,20 +2,22 @@ mod types;
 
 use anyhow::{Context, Result};
 use log::{debug, info};
+use rayon::prelude::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use crate::local::LocalExecutor;
 pub use types::*;
 
 pub struct Collector {
-    executor: LocalExecutor,
+    executor: Arc<Mutex<LocalExecutor>>,
     temp_dir: PathBuf,
 }
 
 impl Collector {
     pub fn new(temp_dir: PathBuf) -> Self {
         Self {
-            executor: LocalExecutor::new(),
+            executor: Arc::new(Mutex::new(LocalExecutor::new())),
             temp_dir,
         }
     }
@@ -27,11 +29,13 @@ impl Collector {
         std::fs::create_dir_all(&self.temp_dir)?;
 
         // 获取当前用户名和组ID
-        let (whoami, _) = self.executor.execute_command("whoami")?;
-        let username = whoami.trim();
-
-        // 设置目录所有者为当前用户
-        self.executor.execute_sudo_command(&format!("chown -R {}:{} {:?}", username, username, self.temp_dir))?;
+        let username = {
+            let mut executor = self.executor.lock().unwrap();
+            let (whoami, _) = executor.execute_command("whoami")?;
+            // 设置目录所有者为当前用户
+            executor.execute_sudo_command(&format!("chown -R {}:{} {:?}", whoami.trim(), whoami.trim(), self.temp_dir))?;
+            whoami.trim().to_string()
+        };
         debug!("已将临时目录所有者设置为: {}", username);
 
         // 收集系统信息
@@ -62,77 +66,90 @@ impl Collector {
     fn collect_system_info(&mut self) -> Result<SystemInfo> {
         info!("收集系统基本信息...");
 
-        // 获取主机名
-        let (hostname, _) = self.executor.execute_command("hostname")?;
+        let (hostname, kernel_version, os_release, cpu_info, pagesize, meminfo, kernel_file_size, initrd_file_size) = {
+            let mut executor = self.executor.lock().unwrap();
 
-        // 获取内核版本
-        let (kernel_version, _) = self.executor.execute_sudo_command("uname -r")?;
+            let (hostname, _) = executor.execute_command("hostname")?;
+            let hostname = hostname.trim().to_string();
 
-        // 获取操作系统信息
-        let (os_release, _) = self.executor.execute_command("cat /etc/os-release | grep PRETTY_NAME")?;
-        let os_release = os_release
-            .trim()
-            .strip_prefix("PRETTY_NAME=")
-            .unwrap_or("")
-            .trim_matches('"')
-            .to_string();
+            let (kernel_str, _) = executor.execute_sudo_command("uname -r")?;
+            let kernel_version = kernel_str.trim().to_string();
 
-        // 获取CPU信息
-        let (cpu_info, _) = self.executor.execute_command("cat /proc/cpuinfo | grep 'model name' | head -1")?;
-        let cpu_info = cpu_info
-            .trim()
-            .strip_prefix("model name")
-            .unwrap_or("")
-            .trim_matches(|c| c == ':' || c == ' ')
-            .to_string();
+            let (os_str, _) = executor.execute_command("cat /etc/os-release | grep PRETTY_NAME")?;
+            let os_release = os_str
+                .trim()
+                .strip_prefix("PRETTY_NAME=")
+                .unwrap_or("")
+                .trim_matches('"')
+                .to_string();
 
-        // 获取页大小
-        let (pagesize, _) = self.executor.execute_command("getconf PAGE_SIZE")?;
+            let (cpu_str, _) = executor.execute_command("cat /proc/cpuinfo | grep 'model name' | head -1")?;
+            let cpu_info = cpu_str
+                .trim()
+                .strip_prefix("model name")
+                .unwrap_or("")
+                .trim_matches(|c| c == ':' || c == ' ')
+                .to_string();
 
-        // 获取内存信息
-        let (meminfo, _) = self.executor.execute_sudo_command("cat /proc/meminfo")?;
+            let (pagesize_str, _) = executor.execute_command("getconf PAGE_SIZE")?;
+            let pagesize = pagesize_str.trim().to_string();
+
+            let (meminfo_str, _) = executor.execute_sudo_command("cat /proc/meminfo")?;
+            let meminfo = meminfo_str;
+
+            // 获取内核和initrd文件大小
+            let kernel_version_clean = kernel_version.trim();
+            let mut kernel_file_size = 0;
+            let mut initrd_file_size = 0;
+
+            // 尝试不同的内核文件命名方式
+            for kernel_path in &[
+                format!("/boot/vmlinuz-{}", kernel_version_clean),
+                format!("/boot/vmlinuz-linux"),
+                format!("/boot/vmlinuz")
+            ] {
+                if let Ok((size, _)) = executor.execute_sudo_command(&format!("stat -c %s {} 2>/dev/null", kernel_path)) {
+                    if let Ok(s) = size.trim().parse::<u64>() {
+                        kernel_file_size = s;
+                        break;
+                    }
+                }
+            }
+
+            // 尝试不同的initrd文件命名方式
+            for initrd_path in &[
+                format!("/boot/initramfs-{}.img", kernel_version_clean),
+                format!("/boot/initramfs-linux.img"),
+                format!("/boot/initrd.img")
+            ] {
+                if let Ok((size, _)) = executor.execute_sudo_command(&format!("stat -c %s {} 2>/dev/null", initrd_path)) {
+                    if let Ok(s) = size.trim().parse::<u64>() {
+                        initrd_file_size = s;
+                        break;
+                    }
+                }
+            }
+
+            (hostname,
+             kernel_version,
+             os_release,
+             cpu_info,
+             pagesize,
+             meminfo,
+             kernel_file_size,
+             initrd_file_size)
+        }; // 释放executor锁
+
+        // 解析内存信息
         let (total_memory, used_memory) = parse_meminfo(&meminfo)
             .context("Failed to parse meminfo")?;
 
         // 获取共享内存总量
         let total_shared_memory = self.collect_total_shared_memory()?;
 
-        // 获取内核文件大小
-        let kernel_version_clean = kernel_version.trim();
-        let mut kernel_file_size = 0;
-        let mut initrd_file_size = 0;
-
-        // 尝试不同的内核文件命名方式
-        for kernel_path in &[
-            format!("/boot/vmlinuz-{}", kernel_version_clean),
-            format!("/boot/vmlinuz-linux"),
-            format!("/boot/vmlinuz")
-        ] {
-            if let Ok((size, _)) = self.executor.execute_sudo_command(&format!("stat -c %s {} 2>/dev/null", kernel_path)) {
-                if let Ok(s) = size.trim().parse::<u64>() {
-                    kernel_file_size = s;
-                    break;
-                }
-            }
-        }
-
-        // 尝试不同的initrd文件命名方式
-        for initrd_path in &[
-            format!("/boot/initramfs-{}.img", kernel_version_clean),
-            format!("/boot/initramfs-linux.img"),
-            format!("/boot/initrd.img")
-        ] {
-            if let Ok((size, _)) = self.executor.execute_sudo_command(&format!("stat -c %s {} 2>/dev/null", initrd_path)) {
-                if let Ok(s) = size.trim().parse::<u64>() {
-                    initrd_file_size = s;
-                    break;
-                }
-            }
-        }
-
         Ok(SystemInfo {
-            hostname: hostname.trim().to_string(),
-            kernel_version: kernel_version.trim().to_string(),
+            hostname,
+            kernel_version,
             os_release,
             cpu_info,
             page_size: pagesize.trim().parse()?,
@@ -150,55 +167,77 @@ impl Collector {
 
     fn collect_processes(&mut self) -> Result<(HashMap<i32, ProcessInfo>, usize)> {
         info!("收集进程信息...");
-        let mut processes = HashMap::new();
-        let mut skipped_count = 0;
-
-        // 先获取进程总数
-        let (process_count, _) = self.executor.execute_command(
-            "ps -e | wc -l"
-        )?;
-        let total = process_count.trim().parse::<usize>().unwrap_or(0);
-        info!("共发现 {} 个进程", total);
+        let executor = self.executor.clone();
+        let skipped_count = Arc::new(Mutex::new(0));
 
         // 获取进程列表
-        let (ps_output, _) = self.executor.execute_command(
-            "ps -e -o pid= -o comm= -o exe="
-        )?;
+        let ps_output = {
+            let mut executor = self.executor.lock().unwrap();
+            let (output, _) = executor.execute_command("ps -e -o pid= -o comm= -o exe=")?;
+            output
+        };
 
-        for line in ps_output.lines() {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 2 {
-                let pid: i32 = parts[0].parse()?;
-                let name = parts[1];
+        // 将进程信息解析为Vec以便并行处理
+        let processes: Vec<(i32, String)> = ps_output.lines()
+            .filter_map(|line| {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    if let Ok(pid) = parts[0].parse::<i32>() {
+                        Some((pid, parts[1].to_string()))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect();
 
-                // 跳过kworker、migration等系统进程
+        info!("共发现 {} 个进程", processes.len());
+
+        // 并行处理所有进程
+        let processed_processes: HashMap<i32, ProcessInfo> = processes.par_iter()
+            .filter_map(|(pid, name)| {
+                // 跳过系统进程
                 if name.starts_with("kworker") ||
                    name.starts_with("migration") ||
                    name.starts_with("watchdog") ||
                    name.starts_with("ksoftirqd") ||
                    name.starts_with("scsi_") ||
                    name.starts_with("kthread") {
-                    skipped_count += 1;
+                    let mut count = skipped_count.lock().unwrap();
+                    *count += 1;
                     debug!("跳过系统进程: {} (PID: {})", name, pid);
-                    continue;
+                    None
+                } else {
+                    let executor_clone = executor.clone();
+                    match self.collect_process_info_parallel(*pid, executor_clone) {
+                        Ok(info) => {
+                            debug!("成功收集进程信息 PID: {}", pid);
+                            Some((*pid, info))
+                        }
+                        Err(e) => {
+                            debug!("收集进程 {} 信息失败: {}", pid, e);
+                            None
+                        }
+                    }
                 }
+            })
+            .collect();
 
-                info!("正在处理第 {} 个进程 (PID: {})", processes.len() + 1, pid);
-                if let Ok(process) = self.collect_process_info(pid) {
-                    processes.insert(pid, process);
-                }
-            }
-        }
-
-        info!("共跳过 {} 个系统进程", skipped_count);
-        Ok((processes, skipped_count))
+        let final_skipped_count = *skipped_count.lock().unwrap();
+        info!("共跳过 {} 个系统进程", final_skipped_count);
+        Ok((processed_processes, final_skipped_count))
     }
 
-    fn collect_process_info(&mut self, pid: i32) -> Result<ProcessInfo> {
+    fn collect_process_info_parallel(&self, pid: i32, executor: Arc<Mutex<LocalExecutor>>) -> Result<ProcessInfo> {
         debug!("收集进程信息 PID: {}", pid);
 
+        let mut executor_guard = executor.lock().unwrap();
+        let executor = &mut *executor_guard;
+
         // 获取进程基本信息
-        let (status, _) = self.executor.execute_sudo_command(
+        let (status, _) = executor.execute_sudo_command(
             &format!("cat /proc/{}/status 2>/dev/null", pid)
         )?;
 
@@ -209,18 +248,17 @@ impl Collector {
             .to_string();
 
         // 获取可执行文件路径
-        // 获取可执行文件路径，处理namespace隔离的情况
-        let (exe_path_str, _) = self.executor.execute_sudo_command(
+        let (exe_path_str, _) = executor.execute_sudo_command(
             &format!("readlink -f /proc/{}/exe 2>/dev/null", pid)
         )?;
         let exe_path = PathBuf::from(exe_path_str.trim());
 
-        // 获取可执行文件大小，如果文件不可访问（比如在namespace中）则返回0
+        // 获取可执行文件大小
         let exe_size = if exe_path.as_os_str().is_empty() {
             debug!("进程 {} 可能运行在独立namespace中，无法获取可执行文件路径", pid);
             0
         } else {
-            match self.executor.execute_sudo_command(
+            match executor.execute_sudo_command(
                 &format!("stat -c %s {:?} 2>/dev/null", exe_path)
             ) {
                 Ok((size, _)) => size.trim().parse().unwrap_or(0),
@@ -233,7 +271,7 @@ impl Collector {
 
         // 收集内存信息 (PSS/RSS)
         let (mut pss, mut rss) = (0, 0);
-        if let Ok((smaps, _)) = self.executor.execute_sudo_command(
+        if let Ok((smaps, _)) = executor.execute_sudo_command(
             &format!("cat /proc/{}/smaps 2>/dev/null", pid)
         ) {
             for line in smaps.lines() {
@@ -254,16 +292,16 @@ impl Collector {
         }
 
         // 获取动态库信息
-        let libraries = self.collect_process_libraries(pid)?;
+        let libraries = self.collect_process_libraries_parallel(pid, executor)?;
 
         // 获取打开的文件数量
-        let (fd_count, _) = self.executor.execute_sudo_command(
+        let (fd_count, _) = executor.execute_sudo_command(
             &format!("ls -l /proc/{}/fd 2>/dev/null | wc -l", pid)
         )?;
         let open_files_count = fd_count.trim().parse().unwrap_or(0);
 
         // 获取共享内存大小
-        let shared_memory = self.collect_process_shared_memory(pid)?;
+        let shared_memory = self.collect_process_shared_memory_parallel(pid, executor)?;
 
         Ok(ProcessInfo {
             pid,
@@ -278,11 +316,16 @@ impl Collector {
         })
     }
 
-    fn collect_process_libraries(&mut self, pid: i32) -> Result<Vec<LibraryInfo>> {
+
+    fn collect_process_libraries_parallel(
+        &self,
+        pid: i32,
+        executor: &mut LocalExecutor
+    ) -> Result<Vec<LibraryInfo>> {
         let mut libraries = Vec::new();
 
         // 获取动态库映射
-        if let Ok((maps, _)) = self.executor.execute_sudo_command(
+        if let Ok((maps, _)) = executor.execute_sudo_command(
             &format!("cat /proc/{}/maps 2>/dev/null", pid)
         ) {
             let mut seen_paths = std::collections::HashSet::new();
@@ -295,7 +338,7 @@ impl Collector {
 
                     if let Some(path) = path {
                         if seen_paths.insert(path.clone()) {
-                            let size = match self.executor.execute_sudo_command(
+                            let size = match executor.execute_sudo_command(
                                 &format!("stat -c %s {:?} 2>/dev/null", path)
                             ) {
                                 Ok((size_str, _)) => size_str.trim().parse().unwrap_or(0),
@@ -319,10 +362,13 @@ impl Collector {
         Ok(libraries)
     }
 
-    fn collect_process_shared_memory(&mut self, pid: i32) -> Result<u64> {
+    fn collect_process_shared_memory_parallel(
+        &self,
+        pid: i32,
+        executor: &mut LocalExecutor
+    ) -> Result<u64> {
         let mut total = 0u64;
-
-        if let Ok((shm, _)) = self.executor.execute_sudo_command(
+        if let Ok((shm, _)) = executor.execute_sudo_command(
             &format!("cat /proc/{}/maps | grep -i shm", pid)
         ) {
             for line in shm.lines() {
@@ -339,7 +385,7 @@ impl Collector {
         let mut total = 0u64;
 
         // 获取 SysV 共享内存
-        if let Ok((ipcs, _)) = self.executor.execute_command("ipcs -m") {
+        if let Ok((ipcs, _)) = self.executor.lock().unwrap().execute_command("ipcs -m") {
             for line in ipcs.lines().skip(3) {
                 if let Some(size) = line.split_whitespace().nth(4) {
                     if let Ok(bytes) = size.parse::<u64>() {
