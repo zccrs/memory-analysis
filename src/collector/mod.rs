@@ -202,23 +202,26 @@ impl Collector {
         // 获取进程列表
         let ps_output = {
             let executor = self.executor.lock().unwrap();
-            let (output, _) = executor.execute_command("ps -e -o pid= -o comm= -o exe=")?;
+            let (output, _) = executor.execute_command("ps -e -o pid= -o comm=")?;
             output
         };
 
         // 将进程信息解析为Vec以便并行处理
         let processes: Vec<(i32, String)> = ps_output.lines()
             .filter_map(|line| {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 2 {
-                    if let Ok(pid) = parts[0].parse::<i32>() {
-                        Some((pid, parts[1].to_string()))
-                    } else {
-                        None
+                // ps 命令输出的格式是: "  PID COMMAND  "，需要处理前导空格
+                let line = line.trim();
+                let mut parts = line.split_whitespace();
+                if let Some(pid_str) = parts.next() {
+                    if let Ok(pid) = pid_str.parse::<i32>() {
+                        // 剩余部分全部作为命令名
+                        let comm = parts.collect::<Vec<&str>>().join(" ");
+                        if !comm.is_empty() {
+                            return Some((pid, comm));
+                        }
                     }
-                } else {
-                    None
                 }
+                None
             })
             .collect();
 
