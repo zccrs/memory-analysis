@@ -47,16 +47,27 @@ cleanup() {
     stty sane 2>/dev/null || true
 }
 
+# 保存SSH进程ID的变量
+SSH_PID1=""
+SSH_PID2=""
+
 # 信号处理函数
 handle_interrupt() {
     echo -e "\n收到中断信号，正在清理..."
+    # 终止正在运行的SSH进程
+    if [ -n "$SSH_PID1" ]; then
+        kill -TERM $SSH_PID1 2>/dev/null
+    fi
+    if [ -n "$SSH_PID2" ]; then
+        kill -TERM $SSH_PID2 2>/dev/null
+    fi
     cleanup
     exit 1
 }
 
 # 设置清理钩子
 trap cleanup EXIT
-trap handle_interrupt INT TERM
+trap handle_interrupt INT TERM QUIT
 
 # 确保本地结果目录及子目录存在
 mkdir -p "$LOCAL_RESULT_DIR/host1"
@@ -68,15 +79,22 @@ SSH_OPTS2="-o ControlMaster=auto -o ControlPath=$SSH_CONTROL_PATH2 -o ControlPer
 
 echo "Step 1: 测试SSH连接..."
 # 测试SSH连接并建立复用
-ssh $SSH_OPTS1 "$REMOTE_HOST1" "echo '主机1连接成功'" || {
+# 测试SSH连接并保存进程ID
+ssh $SSH_OPTS1 "$REMOTE_HOST1" "echo '主机1连接成功'" & SSH_PID1=$!
+wait $SSH_PID1 || {
     echo "错误: 无法连接到主机1"
     exit 1
 }
 
-ssh $SSH_OPTS2 "$REMOTE_HOST2" "echo '主机2连接成功'" || {
+ssh $SSH_OPTS2 "$REMOTE_HOST2" "echo '主机2连接成功'" & SSH_PID2=$!
+wait $SSH_PID2 || {
     echo "错误: 无法连接到主机2"
     exit 1
 }
+
+# 连接成功后清除进程ID
+SSH_PID1=""
+SSH_PID2=""
 
 echo "Step 1: 编译最新版本(静态链接)..."
 RUSTFLAGS='-C target-feature=+crt-static' cargo build --release --target x86_64-unknown-linux-gnu || {
@@ -110,31 +128,39 @@ scp $SSH_OPTS2 "./target/x86_64-unknown-linux-gnu/release/$BINARY_NAME" "$REMOTE
 
 echo "Step 4: 在远程主机上执行程序..."
 echo "在主机1上采集数据..."
-ssh -tt $SSH_OPTS1 "$REMOTE_HOST1" "cd $REMOTE_TEMP_DIR1 && chmod +x $BINARY_NAME && sudo ./$BINARY_NAME . & REMOTE_PID1=\$! && wait \$REMOTE_PID1" || {
+ssh -tt $SSH_OPTS1 "$REMOTE_HOST1" "cd $REMOTE_TEMP_DIR1 && chmod +x $BINARY_NAME && sudo ./$BINARY_NAME ." & SSH_PID1=$!
+wait $SSH_PID1 || {
     echo "错误: 主机1执行失败"
     ssh "$REMOTE_HOST1" "rm -rf $REMOTE_TEMP_DIR1"
     exit 1
 }
+SSH_PID1=""
 
 echo "在主机2上采集数据..."
-ssh -tt $SSH_OPTS2 "$REMOTE_HOST2" "cd $REMOTE_TEMP_DIR2 && chmod +x $BINARY_NAME && sudo ./$BINARY_NAME . & REMOTE_PID2=\$! && wait \$REMOTE_PID2" || {
+ssh -tt $SSH_OPTS2 "$REMOTE_HOST2" "cd $REMOTE_TEMP_DIR2 && chmod +x $BINARY_NAME && sudo ./$BINARY_NAME ." & SSH_PID2=$!
+wait $SSH_PID2 || {
     echo "错误: 主机2执行失败"
     ssh "$REMOTE_HOST2" "rm -rf $REMOTE_TEMP_DIR2"
     exit 1
 }
+SSH_PID2=""
 
 echo "Step 5: 复制结果文件到本地..."
-scp $SSH_OPTS1 -r "$REMOTE_HOST1:$REMOTE_TEMP_DIR1/*" "$LOCAL_RESULT_DIR/host1/" || {
+scp $SSH_OPTS1 -r "$REMOTE_HOST1:$REMOTE_TEMP_DIR1/*" "$LOCAL_RESULT_DIR/host1/" & SSH_PID1=$!
+wait $SSH_PID1 || {
     echo "错误: 无法从主机1复制结果文件"
     ssh "$REMOTE_HOST1" "rm -rf $REMOTE_TEMP_DIR1"
     exit 1
 }
+SSH_PID1=""
 
-scp $SSH_OPTS2 -r "$REMOTE_HOST2:$REMOTE_TEMP_DIR2/*" "$LOCAL_RESULT_DIR/host2/" || {
+scp $SSH_OPTS2 -r "$REMOTE_HOST2:$REMOTE_TEMP_DIR2/*" "$LOCAL_RESULT_DIR/host2/" & SSH_PID2=$!
+wait $SSH_PID2 || {
     echo "错误: 无法从主机2复制结果文件"
     ssh "$REMOTE_HOST2" "rm -rf $REMOTE_TEMP_DIR2"
     exit 1
 }
+SSH_PID2=""
 
 echo "Step 6: 执行对比分析..."
 echo "使用memory-analysis进行差异分析..."

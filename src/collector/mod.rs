@@ -16,6 +16,35 @@ pub struct Collector {
 }
 
 impl Collector {
+    // ... 其他方法 ...
+
+    pub fn collect_single_process(&self, pid: i32) -> Result<String> {
+        let executor = Arc::new(Mutex::new(LocalExecutor::new()));
+        match self.collect_process_info_parallel(pid, executor) {
+            Ok(info) => {
+                let mut output = String::new();
+                output.push_str(&format!("进程信息 (PID: {})\n", pid));
+                output.push_str(&format!("名称: {}\n", info.name));
+                output.push_str(&format!("可执行文件: {:?}\n", info.exe_path));
+                output.push_str(&format!("可执行文件大小: {}\n", format_size(info.exe_size)));
+                output.push_str(&format!("PSS: {}\n", format_size(info.pss)));
+                output.push_str(&format!("RSS: {}\n", format_size(info.rss)));
+                output.push_str(&format!("共享内存: {}\n", format_size(info.shared_memory)));
+                output.push_str(&format!("打开文件数: {}\n", info.open_files_count));
+                output.push_str("\n动态库信息:\n");
+                for lib in &info.libraries {
+                    output.push_str(&format!("- {:?} ({})\n",
+                        lib.path,
+                        format_size(lib.size)));
+                }
+                Ok(output)
+            }
+            Err(e) => anyhow::bail!("无法获取进程 {} 的信息: {}", pid, e)
+        }
+    }
+}
+
+impl Collector {
     pub fn new(temp_dir: PathBuf) -> Self {
         Self {
             executor: Arc::new(Mutex::new(LocalExecutor::new())),
@@ -46,11 +75,10 @@ impl Collector {
         let (processes, skipped_count) = self.collect_processes()?;
         system_info.skipped_processes = skipped_count;
 
-        // 计算进程内存总和
-        let total_pss: u64 = processes.values()
+        // 计算进程内存总和（PSS已经是字节单位）
+        system_info.processes_memory = processes.values()
             .map(|p| p.pss)
             .sum();
-        system_info.processes_memory = total_pss * 1024;  // PSS单位是KB，转换为字节
 
         // 计算内核占用的内存（总使用内存 - 进程内存总和）
         system_info.kernel_memory = system_info.used_memory.saturating_sub(system_info.processes_memory);
@@ -296,24 +324,26 @@ impl Collector {
             }
         };
 
-        // 收集内存信息 (PSS/RSS)
+        // 收集内存信息 (PSS/RSS)，单位从KB转换为字节
         let (mut pss, mut rss) = (0, 0);
         if let Ok((smaps, _)) = executor.execute_sudo_command(
             &format!("cat /proc/{}/smaps 2>/dev/null", pid)
         ) {
             for line in smaps.lines() {
                 if line.starts_with("Pss:") {
-                    pss += line.split_whitespace()
+                    let kb = line.split_whitespace()
                         .nth(1)
                         .unwrap_or("0")
                         .parse::<u64>()
                         .unwrap_or(0);
+                    pss += kb * 1024;  // KB转换为字节
                 } else if line.starts_with("Rss:") {
-                    rss += line.split_whitespace()
+                    let kb = line.split_whitespace()
                         .nth(1)
                         .unwrap_or("0")
                         .parse::<u64>()
                         .unwrap_or(0);
+                    rss += kb * 1024;  // KB转换为字节
                 }
             }
         }
@@ -447,6 +477,16 @@ fn parse_meminfo(content: &str) -> Result<(u64, u64)> {
     }
 
     Ok((total, total - available))
+}
+
+fn format_size(bytes: u64) -> String {
+    if bytes >= 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / 1024.0 / 1024.0)
+    } else if bytes >= 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{} B", bytes)
+    }
 }
 
 fn parse_memory_range(line: &str) -> Option<u64> {

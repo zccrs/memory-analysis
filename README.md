@@ -33,6 +33,33 @@ cargo build --release
 
 memory-analysis提供两种工作模式：采集模式和对比模式。目录的名称将作为采集说明，例如"升级前"、"升级后"等。
 
+### 远程主机对比分析
+
+如果需要对比两台不同主机的内存状态，可以使用`memory-analysis.sh`脚本：
+
+```bash
+./memory-analysis.sh <第一台主机(user@host)> <第二台主机(user@host)> <本地结果目录>
+```
+
+例如：
+```bash
+./memory-analysis.sh zccrs@127.0.0.1 zccrs@10.20.7.185 /tmp/test
+```
+
+此脚本会：
+1. 自动编译最新版本的memory-analysis程序（静态链接）
+2. 将程序复制到两台远程主机
+3. 在两台主机上执行数据采集
+4. 将采集结果复制回本地
+5. 进行差异分析并生成报告
+
+使用此脚本前请确保：
+- 两台主机都能通过SSH访问
+- 本地已安装Rust工具链
+- 远程主机具有sudo权限
+
+分析报告将保存在指定的本地结果目录中。
+
 ### 基本用法
 
 #### 1. 采集模式
@@ -122,8 +149,33 @@ memory-analysis [输出目录|选项]
 
 选项:
     --diff <文件1> <文件2>    对比模式：比较两个采集数据目录或JSON文件
+    --pid <PID>            单进程模式：指定进程ID，直接输出该进程的内存使用情况
     --log-level <LEVEL>     日志级别 (debug, info, warn, error) [默认: info]
     --temp-dir <DIR>        临时目录 [默认: /tmp/memdiff]
+```
+
+### 单进程分析示例
+
+如果只想查看单个进程的内存使用情况，可以使用`--pid`参数：
+
+```bash
+# 分析指定进程的内存使用情况
+memory-analysis --pid 12345
+
+# 输出结果示例：
+进程信息 (PID: 12345)
+名称: example
+可执行文件: "/usr/bin/example"
+可执行文件大小: 2.5 MB
+PSS: 15.7 MB
+RSS: 25.3 MB
+共享内存: 128.0 KB
+打开文件数: 12
+
+动态库信息:
+- "/usr/lib/libc.so.6" (2.1 MB)
+- "/usr/lib/libstdc++.so.6" (1.8 MB)
+...
 ```
 
 ### 权限要求
@@ -171,6 +223,10 @@ memory-analysis [输出目录|选项]
 2. JSON文件格式错误
    - 确保对比数据文件未被修改
    - 使用最新版本的工具重新采集数据
+
+3. 使用memory-analysis.sh脚本时的Ctrl+C问题
+   - 在SSH连接建立阶段，按Ctrl+C可能会导致脚本无法正常退出
+   - 建议等待SSH连接完全建立后再使用Ctrl+C中断
 
 ## 贡献指南
 

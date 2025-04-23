@@ -65,8 +65,8 @@ impl Analyzer {
         )?;
 
         // 计算总内存差异
-        diff.total_diff = host2_data.system_info.total_memory as i64
-            - host1_data.system_info.total_memory as i64;
+        diff.total_diff = host2_data.system_info.used_memory as i64
+            - host1_data.system_info.used_memory as i64;
 
         Ok(diff)
     }

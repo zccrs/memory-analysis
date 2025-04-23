@@ -132,6 +132,16 @@ fn handle_collect(args: &Args, output_dir: PathBuf) -> Result<()> {
     Ok(())
 }
 
+fn handle_single_process(_args: &Args, pid: i32) -> Result<()> {
+    info!("开始采集单个进程信息...");
+
+    let collector = Collector::new(PathBuf::from("/tmp"));
+    let result = collector.collect_single_process(pid)?;
+    println!("\n{}", result);
+
+    Ok(())
+}
+
 fn run(args: Args) -> Result<()> {
     // 验证参数
     args.validate()?;
@@ -141,6 +151,8 @@ fn run(args: Args) -> Result<()> {
         handle_collect(&args, output_dir.clone())
     } else if let Some(ref targets) = args.diff_targets {
         handle_diff_command(&args, targets.clone())
+    } else if let Some(pid) = args.pid {
+        handle_single_process(&args, pid)
     } else {
         unreachable!("由参数分组保证了必须有一个模式被选择")
     }

@@ -20,6 +20,10 @@ pub struct Args {
     /// 临时目录
     #[arg(long = "temp-dir", default_value = "/tmp/memdiff")]
     pub temp_dir: PathBuf,
+
+    /// 单进程模式：指定进程ID，直接在终端输出采集结果
+    #[arg(long = "pid", group = "mode")]
+    pub pid: Option<i32>,
 }
 
 impl Args {
