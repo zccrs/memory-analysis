@@ -44,7 +44,7 @@ scp "./target/x86_64-unknown-linux-gnu/release/$BINARY_NAME" "$REMOTE_HOST:$REMO
 }
 
 echo "Step 4: 在远程主机上执行程序..."
-ssh "$REMOTE_HOST" "cd $REMOTE_TEMP_DIR && chmod +x $BINARY_NAME && sudo ./$BINARY_NAME ." || {
+ssh -t "$REMOTE_HOST" "cd $REMOTE_TEMP_DIR && chmod +x $BINARY_NAME && sudo ./$BINARY_NAME ." || {
     echo "错误: 远程执行失败"
     ssh "$REMOTE_HOST" "rm -rf $REMOTE_TEMP_DIR"
     exit 1
