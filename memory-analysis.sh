@@ -26,12 +26,12 @@ SSH_CONTROL_PATH="/tmp/ssh-memory-analysis-$$.socket"
 cleanup() {
     # 终止远程进程
     if [ -n "$REMOTE_PID" ]; then
-        ssh -o "ControlPath=$SSH_CONTROL_PATH" "$REMOTE_HOST" "sudo kill -TERM $REMOTE_PID" 2>/dev/null
+        ssh $SSH_OPTS "$REMOTE_HOST" "sudo kill -TERM $REMOTE_PID" 2>/dev/null
     fi
     # 清理远程临时目录
-    ssh -o "ControlPath=$SSH_CONTROL_PATH" "$REMOTE_HOST" "rm -rf $REMOTE_TEMP_DIR" 2>/dev/null
+    ssh $SSH_OPTS "$REMOTE_HOST" "rm -rf $REMOTE_TEMP_DIR" 2>/dev/null
     # 关闭SSH主连接
-    ssh -O exit -o "ControlPath=$SSH_CONTROL_PATH" "$REMOTE_HOST" 2>/dev/null
+    ssh -O exit $SSH_OPTS "$REMOTE_HOST" 2>/dev/null
     # 删除控制socket
     rm -f "$SSH_CONTROL_PATH"
     # 恢复终端状态
@@ -52,9 +52,15 @@ trap handle_interrupt INT TERM
 # 确保本地结果目录存在
 mkdir -p "$LOCAL_RESULT_DIR"
 
-echo "Step 1: 建立SSH连接..."
-# 创建主SSH连接
-ssh -nNf -o "ControlMaster=yes" -o "ControlPath=$SSH_CONTROL_PATH" "$REMOTE_HOST"
+# SSH复用连接选项
+SSH_OPTS="-o ControlMaster=auto -o ControlPath=$SSH_CONTROL_PATH -o ControlPersist=yes"
+
+echo "Step 1: 测试SSH连接..."
+# 测试SSH连接并建立复用
+ssh $SSH_OPTS "$REMOTE_HOST" "echo '连接成功'" || {
+    echo "错误: 无法连接到远程主机"
+    exit 1
+}
 
 echo "Step 1: 编译最新版本(静态链接)..."
 RUSTFLAGS='-C target-feature=+crt-static' cargo build --release --target x86_64-unknown-linux-gnu || {
@@ -63,27 +69,27 @@ RUSTFLAGS='-C target-feature=+crt-static' cargo build --release --target x86_64-
 }
 
 echo "Step 2: 创建远程临时目录..."
-ssh -o "ControlPath=$SSH_CONTROL_PATH" "$REMOTE_HOST" "mkdir -p $REMOTE_TEMP_DIR" || {
+ssh $SSH_OPTS "$REMOTE_HOST" "mkdir -p $REMOTE_TEMP_DIR" || {
     echo "错误: 无法在远程主机上创建目录"
     exit 1
 }
 
 echo "Step 3: 复制程序到远程主机..."
-scp -o "ControlPath=$SSH_CONTROL_PATH" "./target/x86_64-unknown-linux-gnu/release/$BINARY_NAME" "$REMOTE_HOST:$REMOTE_TEMP_DIR/" || {
+scp $SSH_OPTS "./target/x86_64-unknown-linux-gnu/release/$BINARY_NAME" "$REMOTE_HOST:$REMOTE_TEMP_DIR/" || {
     echo "错误: 无法复制程序到远程主机"
     ssh "$REMOTE_HOST" "rm -rf $REMOTE_TEMP_DIR"
     exit 1
 }
 
 echo "Step 4: 在远程主机上执行程序..."
-ssh -tt -o "ControlPath=$SSH_CONTROL_PATH" "$REMOTE_HOST" "cd $REMOTE_TEMP_DIR && chmod +x $BINARY_NAME && sudo ./$BINARY_NAME . & REMOTE_PID=\$! && wait \$REMOTE_PID" || {
+ssh -tt $SSH_OPTS "$REMOTE_HOST" "cd $REMOTE_TEMP_DIR && chmod +x $BINARY_NAME && sudo ./$BINARY_NAME . & REMOTE_PID=\$! && wait \$REMOTE_PID" || {
     echo "错误: 远程执行失败"
     ssh "$REMOTE_HOST" "rm -rf $REMOTE_TEMP_DIR"
     exit 1
 }
 
 echo "Step 5: 复制结果文件到本地..."
-scp -o "ControlPath=$SSH_CONTROL_PATH" -r "$REMOTE_HOST:$REMOTE_TEMP_DIR/*" "$LOCAL_RESULT_DIR/" || {
+scp $SSH_OPTS -r "$REMOTE_HOST:$REMOTE_TEMP_DIR/*" "$LOCAL_RESULT_DIR/" || {
     echo "错误: 无法复制结果文件"
     ssh "$REMOTE_HOST" "rm -rf $REMOTE_TEMP_DIR"
     exit 1
