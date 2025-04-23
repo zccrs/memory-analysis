@@ -9,9 +9,9 @@ pub struct Args {
     #[arg(group = "mode")]
     pub output: Option<PathBuf>,
 
-    /// 对比模式：指定两个数据目录进行对比
+    /// 对比模式：指定两个数据目录或json文件进行对比
     #[arg(long = "diff", num_args = 2, group = "mode")]
-    pub diff_dirs: Option<Vec<PathBuf>>,
+    pub diff_targets: Option<Vec<PathBuf>>,
 
     /// 日志级别 (debug, info, warn, error)
     #[arg(long = "log-level", default_value = "info")]
@@ -42,18 +42,26 @@ impl Args {
             }
         }
 
-        // 验证对比目录
-        if let Some(ref dirs) = self.diff_dirs {
-            for dir in dirs {
-                if !dir.exists() || !dir.is_dir() {
-                    anyhow::bail!("指定的目录不存在: {}", dir.display());
+        // 验证对比目标（目录或json文件）
+        if let Some(ref targets) = self.diff_targets {
+            for target in targets {
+                if !target.exists() {
+                    anyhow::bail!("指定的路径不存在: {}", target.display());
                 }
-                // 检查目录下是否有采集数据文件
-                let has_json = std::fs::read_dir(dir)?
-                    .filter_map(|e| e.ok())
-                    .any(|e| e.path().extension().map_or(false, |ext| ext == "json"));
-                if !has_json {
-                    anyhow::bail!("目录 {} 下没有找到采集数据文件", dir.display());
+
+                if target.is_dir() {
+                    // 如果是目录，检查是否包含json文件
+                    let has_json = std::fs::read_dir(target)?
+                        .filter_map(|e| e.ok())
+                        .any(|e| e.path().extension().map_or(false, |ext| ext == "json"));
+                    if !has_json {
+                        anyhow::bail!("目录 {} 下没有找到采集数据文件", target.display());
+                    }
+                } else {
+                    // 如果是文件，检查是否是json文件
+                    if target.extension().map_or(false, |ext| ext != "json") {
+                        anyhow::bail!("文件 {} 不是json格式", target.display());
+                    }
                 }
             }
         }

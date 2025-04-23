@@ -42,27 +42,33 @@ async fn main() {
     }
 }
 
-fn handle_diff_command(_args: &Args, dirs: Vec<PathBuf>) -> Result<()> {
+fn handle_diff_command(_args: &Args, targets: Vec<PathBuf>) -> Result<()> {
     info!("开始对比分析...");
 
-    // 从两个目录中查找最新的json文件
-    let get_latest_json = |dir: &PathBuf| -> Result<PathBuf> {
-        let mut jsons: Vec<_> = std::fs::read_dir(dir)?
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .filter(|p| p.extension().map_or(false, |ext| ext == "json") && p.file_name().map_or(false, |name| name.to_str().map_or(false, |s| s.starts_with("test"))))
-            .collect();
+    // 获取json文件路径
+    let get_json_path = |target: &PathBuf| -> Result<PathBuf> {
+        if target.is_dir() {
+            // 从目录中查找最新的json文件
+            let mut jsons: Vec<_> = std::fs::read_dir(target)?
+                .filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| p.extension().map_or(false, |ext| ext == "json"))
+                .collect();
 
-        jsons.sort_by(|a, b| b.metadata().unwrap().modified().unwrap()
-            .cmp(&a.metadata().unwrap().modified().unwrap()));
+            jsons.sort_by(|a, b| b.metadata().unwrap().modified().unwrap()
+                .cmp(&a.metadata().unwrap().modified().unwrap()));
 
-        jsons.first()
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("目录 {} 中没有找到采集数据文件", dir.display()))
+            jsons.first()
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("目录 {} 中没有找到采集数据文件", target.display()))
+        } else {
+            // 直接返回json文件路径
+            Ok(target.clone())
+        }
     };
 
-    let file1 = get_latest_json(&dirs[0])?;
-    let file2 = get_latest_json(&dirs[1])?;
+    let file1 = get_json_path(&targets[0])?;
+    let file2 = get_json_path(&targets[1])?;
 
     info!("对比数据文件:");
     info!("- {}", file1.display());
@@ -76,9 +82,19 @@ fn handle_diff_command(_args: &Args, dirs: Vec<PathBuf>) -> Result<()> {
     info!("分析内存差异...");
     let diff = Analyzer::analyze(result1, result2)?;
 
-    // 生成报告并保存到第二个目录
+    // 确定报告保存位置
+    let report_dir = if targets[1].is_dir() {
+        targets[1].clone()
+    } else {
+        // 如果target2是文件，则使用当前目录
+        std::env::current_dir()?
+    };
+
+    // 生成报告
     info!("生成分析报告...");
-    let (json_path, md_path, csv_path) = Reporter::generate_report(&diff, &dirs[1], dirs[0].to_str().unwrap_or("旧数据"), dirs[1].to_str().unwrap_or("新数据"))?;
+    let desc1 = targets[0].file_stem().and_then(|s| s.to_str()).unwrap_or("旧数据");
+    let desc2 = targets[1].file_stem().and_then(|s| s.to_str()).unwrap_or("新数据");
+    let (json_path, md_path, csv_path) = Reporter::generate_report(&diff, &report_dir, desc1, desc2)?;
 
     info!("分析完成！报告已保存到以下位置:");
     info!("- JSON报告: {}", json_path.display());
@@ -123,8 +139,8 @@ fn run(args: Args) -> Result<()> {
     // 处理采集或对比命令
     if let Some(ref output_dir) = args.output {
         handle_collect(&args, output_dir.clone())
-    } else if let Some(ref dirs) = args.diff_dirs {
-        handle_diff_command(&args, dirs.clone())
+    } else if let Some(ref targets) = args.diff_targets {
+        handle_diff_command(&args, targets.clone())
     } else {
         unreachable!("由参数分组保证了必须有一个模式被选择")
     }
