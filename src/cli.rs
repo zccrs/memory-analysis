@@ -2,11 +2,7 @@ use clap::Parser;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(
-    name = "memdiff",
-    about = "对比Linux系统内存使用差异",
-    version
-)]
+#[command(name = "memdiff", about = "对比Linux系统内存使用差异", version = "0.1.0")]
 #[command(group = clap::ArgGroup::new("mode").required(true))]
 pub struct Args {
     /// 采集模式：输出目录路径，目录名作为采集说明

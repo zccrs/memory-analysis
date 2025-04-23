@@ -172,7 +172,7 @@ impl Collector {
 
         // 获取进程列表
         let ps_output = {
-            let mut executor = self.executor.lock().unwrap();
+            let executor = self.executor.lock().unwrap();
             let (output, _) = executor.execute_command("ps -e -o pid= -o comm= -o exe=")?;
             output
         };

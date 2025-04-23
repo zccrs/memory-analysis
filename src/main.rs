@@ -5,7 +5,6 @@ mod analyzer;
 mod reporter;
 
 use anyhow::Result;
-use env_logger::Env;
 use log::{error, info};
 use std::path::PathBuf;
 use std::process;
@@ -42,7 +41,7 @@ async fn main() {
     }
 }
 
-fn handle_diff_command(args: &Args, dirs: Vec<PathBuf>) -> Result<()> {
+fn handle_diff_command(_args: &Args, dirs: Vec<PathBuf>) -> Result<()> {
     info!("开始对比分析...");
 
     // 从两个目录中查找最新的json文件
@@ -50,7 +49,7 @@ fn handle_diff_command(args: &Args, dirs: Vec<PathBuf>) -> Result<()> {
         let mut jsons: Vec<_> = std::fs::read_dir(dir)?
             .filter_map(|e| e.ok())
             .map(|e| e.path())
-            .filter(|p| p.extension().map_or(false, |ext| ext == "json"))
+            .filter(|p| p.extension().map_or(false, |ext| ext == "json") && p.file_name().map_or(false, |name| name.to_str().map_or(false, |s| s.starts_with("test"))))
             .collect();
 
         jsons.sort_by(|a, b| b.metadata().unwrap().modified().unwrap()
@@ -78,7 +77,7 @@ fn handle_diff_command(args: &Args, dirs: Vec<PathBuf>) -> Result<()> {
 
     // 生成报告并保存到第二个目录
     info!("生成分析报告...");
-    Reporter::generate_report(&diff, &dirs[1])?;
+    Reporter::generate_report(&diff, &dirs[1], dirs[0].to_str().unwrap_or("旧数据"), dirs[1].to_str().unwrap_or("新数据"))?;
 
     info!("分析完成！报告已保存到: {}", dirs[1].display());
     info!("- JSON报告: {}", dirs[1].join("diff_report.json").display());
@@ -112,7 +111,7 @@ fn handle_collect(args: &Args, output_dir: PathBuf) -> Result<()> {
     Ok(())
 }
 
-fn run(mut args: Args) -> Result<()> {
+fn run(args: Args) -> Result<()> {
     // 验证参数
     args.validate()?;
 

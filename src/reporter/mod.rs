@@ -4,11 +4,12 @@ use std::path::Path;
 use std::fs;
 use serde_json;
 use log::info;
+use csv::Writer; // 添加 CSV 写入器
 
 pub struct Reporter;
 
 impl Reporter {
-    pub fn generate_report(diff: &MemoryDiff, output_dir: &Path) -> Result<()> {
+    pub fn generate_report(diff: &MemoryDiff, output_dir: &Path, old_identifier: &str, new_identifier: &str) -> Result<()> {
         info!("生成分析报告...");
 
         // 生成 JSON 格式报告
@@ -16,17 +17,26 @@ impl Reporter {
         fs::write(output_dir.join("diff_report.json"), json)?;
 
         // 生成中文 Markdown 报告
-        let markdown = Self::generate_markdown_report(diff)?;
+        let markdown = Self::generate_markdown_report(diff, old_identifier, new_identifier)?;
         fs::write(output_dir.join("diff_report_中文.md"), markdown)?;
+
+        // 生成 CSV 报告
+        Self::generate_csv_report(diff, output_dir)?;
 
         Ok(())
     }
 
-    fn generate_markdown_report(diff: &MemoryDiff) -> Result<String> {
+    fn generate_markdown_report(diff: &MemoryDiff, old_identifier: &str, new_identifier: &str) -> Result<String> {
         let mut report = String::new();
 
         // 添加报告标题
         report.push_str("# 内存使用差异分析报告\n\n");
+        report.push_str(&format!("本报告是 {} 相对于 {} 的内存使用情况。\n\n", new_identifier, old_identifier));
+        report.push_str(&format!("总进程数量（{}）：{}\n", new_identifier, diff.new_processes.len() + diff.changed_processes.len()));
+        report.push_str(&format!("总进程数量（{}）：{}\n", old_identifier, diff.removed_processes.len() + diff.changed_processes.len()));
+        report.push_str(&format!("新增进程数量：{}\n\n", diff.new_processes.len()));
+
+        report.push_str(&format!("本报告对比了 {} 和 {} 的内存使用情况。\n\n", old_identifier, new_identifier));
 
         // 总体内存差异
         report.push_str("## 总体内存差异\n\n");
@@ -197,5 +207,52 @@ impl Reporter {
         }
 
         Ok(report)
+    }
+
+    fn generate_csv_report(diff: &MemoryDiff, output_dir: &Path) -> Result<()> {
+        let csv_path = output_dir.join("process_memory_changes.csv");
+        let mut wtr = Writer::from_path(csv_path)?;
+
+        // 写入表头
+        wtr.write_record(&["进程名", "旧内存占用", "新内存占用", "内存变化"])?;
+
+        // 新增进程
+        for (name, process) in &diff.new_processes {
+            let mem = if process.pss > 0 {
+                process.pss
+            } else {
+                process.rss
+            };
+            wtr.write_record(&[name, "0", &mem.to_string(), &mem.to_string()])?;
+        }
+
+        // 已删除进程
+        for (name, process) in &diff.removed_processes {
+            let mem = if process.pss > 0 {
+                process.pss
+            } else {
+                process.rss
+            };
+            wtr.write_record(&[name, &mem.to_string(), "0", &(-(mem as i64)).to_string()])?;
+        }
+
+        // 变化的进程
+        for (name, proc_diff) in &diff.changed_processes {
+            let old_mem = if proc_diff.old_process.pss > 0 {
+                proc_diff.old_process.pss
+            } else {
+                proc_diff.old_process.rss
+            };
+            let new_mem = if proc_diff.new_process.pss > 0 {
+                proc_diff.new_process.pss
+            } else {
+                proc_diff.new_process.rss
+            };
+            let mem_change = (new_mem as i64) - (old_mem as i64);
+            wtr.write_record(&[name, &old_mem.to_string(), &new_mem.to_string(), &mem_change.to_string()])?;
+        }
+
+        wtr.flush()?;
+        Ok(())
     }
 }

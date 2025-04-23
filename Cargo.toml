@@ -1,20 +1,18 @@
 [package]
 name = "memory-analysis"
 version = "0.1.0"
-edition = "2021"
-authors = ["Memory Analysis Team"]
-description = "A tool for analyzing memory usage differences between two Linux hosts"
+edition = "2018"
 
+# 依赖项
 [dependencies]
-clap = { version = "4.4", features = ["derive"] }
-ssh2 = "0.9"
+anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-anyhow = "1.0"
 log = "0.4"
-env_logger = "0.10"
-tokio = { version = "1.35", features = ["full"] }
-chrono = { version = "0.4", features = ["serde"] }
-byte-unit = "4.0"
-rpassword = "7.0"
-rayon = "1.8"
+env_logger = "0.9"
+csv = "1.1"  # 添加 CSV 依赖
+rayon = "1.5"  # 添加 Rayon 依赖
+chrono = { version = "0.4", features = ["serde"] }  # 添加 Chrono 依赖并启用 serde 特性
+tokio = { version = "1", features = ["full"] }  # 添加 Tokio 依赖
+clap = { version = "4.0", features = ["derive"] }  # 更新 Clap 依赖到最新版本
+byte-unit = "4.0"  # 添加 Byte Unit 依赖
