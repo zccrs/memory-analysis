@@ -166,21 +166,19 @@ impl Analyzer {
             }
         }
 
-        // 如果有显著变化，添加到差异列表
-        if memory_diff != 0 || !library_changes.is_empty() {
-            diff.changed_processes.insert(
-                old_proc.name.clone(),
-                ProcessDiff {
-                    old_process: old_proc.clone(),
-                    new_process: new_proc.clone(),
-                    memory_diff,
-                    library_changes,
-                    exe_size_diff: new_proc.exe_size as i64 - old_proc.exe_size as i64,
-                    open_files_diff: new_proc.open_files_count as i32 - old_proc.open_files_count as i32,
-                    shared_memory_diff: new_proc.shared_memory as i64 - old_proc.shared_memory as i64,
-                },
-            );
-        }
+        // 记录所有进程的变化情况，包括无变化的进程
+        diff.changed_processes.insert(
+            old_proc.name.clone(),
+            ProcessDiff {
+                old_process: old_proc.clone(),
+                new_process: new_proc.clone(),
+                memory_diff,
+                library_changes,
+                exe_size_diff: new_proc.exe_size as i64 - old_proc.exe_size as i64,
+                open_files_diff: new_proc.open_files_count as i32 - old_proc.open_files_count as i32,
+                shared_memory_diff: new_proc.shared_memory as i64 - old_proc.shared_memory as i64,
+            },
+        );
 
         Ok(())
     }

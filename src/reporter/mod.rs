@@ -169,47 +169,47 @@ impl Reporter {
             }
         }
 
-        // 变化的进程详情
+        // 所有进程详情（包括无变化的进程）
         if !diff.changed_processes.is_empty() {
-            report.push_str("### 进程变化详情\n\n");
+            report.push_str("### 进程详情\n\n");
             for (name, proc_diff) in &diff.changed_processes {
-                if proc_diff.memory_diff != 0 {
-                    report.push_str(&format!("#### {}\n", name));
-                    report.push_str(&format!("- 内存变化：{}\n",
-                        Analyzer::format_bytes(proc_diff.memory_diff)));
+                report.push_str(&format!("#### {}\n", name));
+                report.push_str(&format!("- 内存使用：{} -> {} (变化：{})\n",
+                    Analyzer::format_bytes(if proc_diff.old_process.pss > 0 { proc_diff.old_process.pss as i64 } else { proc_diff.old_process.rss as i64 }),
+                    Analyzer::format_bytes(if proc_diff.new_process.pss > 0 { proc_diff.new_process.pss as i64 } else { proc_diff.new_process.rss as i64 }),
+                    Analyzer::format_bytes(proc_diff.memory_diff)));
 
-                    if proc_diff.exe_size_diff != 0 {
-                        report.push_str(&format!("- 可执行文件大小变化：{}\n",
-                            Analyzer::format_bytes(proc_diff.exe_size_diff)));
-                    }
+                if proc_diff.exe_size_diff != 0 {
+                    report.push_str(&format!("- 可执行文件大小变化：{}\n",
+                        Analyzer::format_bytes(proc_diff.exe_size_diff)));
+                }
 
-                    if proc_diff.open_files_diff != 0 {
-                        report.push_str(&format!("- 打开文件数变化：{:+}\n",
-                            proc_diff.open_files_diff));
-                    }
+                if proc_diff.open_files_diff != 0 {
+                    report.push_str(&format!("- 打开文件数变化：{:+}\n",
+                        proc_diff.open_files_diff));
+                }
 
-                    // 动态库变化
-                    if !proc_diff.library_changes.is_empty() {
-                        report.push_str("- 动态库变化：\n");
-                        for lib in &proc_diff.library_changes {
-                            match (&lib.old_path, &lib.new_path) {
-                                (Some(old), Some(new)) if old == new => {
-                                    report.push_str(&format!("  - 库大小变化 {}：{}\n",
-                                        old,
-                                        Analyzer::format_bytes(lib.size_diff)));
-                                }
-                                (Some(old), None) => {
-                                    report.push_str(&format!("  - 移除库 {}\n", old));
-                                }
-                                (None, Some(new)) => {
-                                    report.push_str(&format!("  - 新增库 {}\n", new));
-                                }
-                                _ => {}
+                // 动态库变化
+                if !proc_diff.library_changes.is_empty() {
+                    report.push_str("- 动态库变化：\n");
+                    for lib in &proc_diff.library_changes {
+                        match (&lib.old_path, &lib.new_path) {
+                            (Some(old), Some(new)) if old == new => {
+                                report.push_str(&format!("  - 库大小变化 {}：{}\n",
+                                    old,
+                                    Analyzer::format_bytes(lib.size_diff)));
                             }
+                            (Some(old), None) => {
+                                report.push_str(&format!("  - 移除库 {}\n", old));
+                            }
+                            (None, Some(new)) => {
+                                report.push_str(&format!("  - 新增库 {}\n", new));
+                            }
+                            _ => {}
                         }
                     }
-                    report.push('\n');
                 }
+                report.push('\n');
             }
         }
 
