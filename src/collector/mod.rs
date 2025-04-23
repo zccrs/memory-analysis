@@ -201,16 +201,27 @@ impl Collector {
             .to_string();
 
         // 获取可执行文件路径
-        let (exe_path, _) = self.executor.execute_sudo_command(
+        // 获取可执行文件路径，处理namespace隔离的情况
+        let (exe_path_str, _) = self.executor.execute_sudo_command(
             &format!("readlink -f /proc/{}/exe 2>/dev/null", pid)
         )?;
-        let exe_path = PathBuf::from(exe_path.trim());
+        let exe_path = PathBuf::from(exe_path_str.trim());
 
-        // 获取可执行文件大小
-        let (exe_size, _) = self.executor.execute_sudo_command(
-            &format!("stat -c %s {:?} 2>/dev/null", exe_path)
-        )?;
-        let exe_size = exe_size.trim().parse().unwrap_or(0);
+        // 获取可执行文件大小，如果文件不可访问（比如在namespace中）则返回0
+        let exe_size = if exe_path.as_os_str().is_empty() {
+            debug!("进程 {} 可能运行在独立namespace中，无法获取可执行文件路径", pid);
+            0
+        } else {
+            match self.executor.execute_sudo_command(
+                &format!("stat -c %s {:?} 2>/dev/null", exe_path)
+            ) {
+                Ok((size, _)) => size.trim().parse().unwrap_or(0),
+                Err(e) => {
+                    debug!("无法获取进程 {} 的可执行文件大小: {}", pid, e);
+                    0
+                }
+            }
+        };
 
         // 收集内存信息 (PSS/RSS)
         let (mut pss, mut rss) = (0, 0);
@@ -276,16 +287,21 @@ impl Collector {
 
                     if let Some(path) = path {
                         if seen_paths.insert(path.clone()) {
-                            if let Ok((size, _)) = self.executor.execute_sudo_command(
+                            let size = match self.executor.execute_sudo_command(
                                 &format!("stat -c %s {:?} 2>/dev/null", path)
                             ) {
-                                let size: u64 = size.trim().parse().unwrap_or(0);
-                                libraries.push(LibraryInfo {
-                                    path,
-                                    size,
-                                    loaded_size: 0, // TODO: 计算实际加载大小
-                                });
-                            }
+                                Ok((size_str, _)) => size_str.trim().parse().unwrap_or(0),
+                                Err(e) => {
+                                    debug!("无法获取动态库 {:?} 的大小: {}", path, e);
+                                    0
+                                }
+                            };
+
+                            libraries.push(LibraryInfo {
+                                path,
+                                size,
+                                loaded_size: 0, // TODO: 计算实际加载大小
+                            });
                         }
                     }
                 }
