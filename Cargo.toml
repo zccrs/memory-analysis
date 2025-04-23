@@ -16,3 +16,4 @@ chrono = { version = "0.4", features = ["serde"] }  # 添加 Chrono 依赖并启
 tokio = { version = "1", features = ["full"] }  # 添加 Tokio 依赖
 clap = { version = "4.0", features = ["derive"] }  # 更新 Clap 依赖到最新版本
 byte-unit = "4.0"  # 添加 Byte Unit 依赖
+nix = { version = "0.26", features = ["fs"] }  # 添加 nix 依赖用于文件权限操作

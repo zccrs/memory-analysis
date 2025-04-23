@@ -1,6 +1,6 @@
 use crate::analyzer::{Analyzer, MemoryDiff};
 use anyhow::Result;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::fs;
 use serde_json;
 use log::info;
@@ -9,21 +9,28 @@ use csv::Writer; // 添加 CSV 写入器
 pub struct Reporter;
 
 impl Reporter {
-    pub fn generate_report(diff: &MemoryDiff, output_dir: &Path, old_identifier: &str, new_identifier: &str) -> Result<()> {
+    pub fn generate_report(diff: &MemoryDiff, output_dir: &Path, old_identifier: &str, new_identifier: &str) -> Result<(PathBuf, PathBuf, PathBuf)> {
         info!("生成分析报告...");
+
+        let json_path = output_dir.join("diff_report.json");
+        let md_path = output_dir.join("diff_report_中文.md");
+        let csv_path = output_dir.join("process_memory_changes.csv");
 
         // 生成 JSON 格式报告
         let json = serde_json::to_string_pretty(diff)?;
-        fs::write(output_dir.join("diff_report.json"), json)?;
+        fs::write(&json_path, json)?;
+        crate::utils::fix_file_owner(&json_path)?;
 
         // 生成中文 Markdown 报告
         let markdown = Self::generate_markdown_report(diff, old_identifier, new_identifier)?;
-        fs::write(output_dir.join("diff_report_中文.md"), markdown)?;
+        fs::write(&md_path, markdown)?;
+        crate::utils::fix_file_owner(&md_path)?;
 
         // 生成 CSV 报告
-        Self::generate_csv_report(diff, output_dir)?;
+        Self::generate_csv_report(diff, &csv_path)?;
+        crate::utils::fix_file_owner(&csv_path)?;
 
-        Ok(())
+        Ok((json_path, md_path, csv_path))
     }
 
     fn generate_markdown_report(diff: &MemoryDiff, old_identifier: &str, new_identifier: &str) -> Result<String> {
@@ -209,8 +216,7 @@ impl Reporter {
         Ok(report)
     }
 
-    fn generate_csv_report(diff: &MemoryDiff, output_dir: &Path) -> Result<()> {
-        let csv_path = output_dir.join("process_memory_changes.csv");
+    fn generate_csv_report(diff: &MemoryDiff, csv_path: &Path) -> Result<()> {
         let mut wtr = Writer::from_path(csv_path)?;
 
         // 写入表头

@@ -3,6 +3,7 @@ mod local;
 mod collector;
 mod analyzer;
 mod reporter;
+mod utils;
 
 use anyhow::Result;
 use log::{error, info};
@@ -77,11 +78,12 @@ fn handle_diff_command(_args: &Args, dirs: Vec<PathBuf>) -> Result<()> {
 
     // 生成报告并保存到第二个目录
     info!("生成分析报告...");
-    Reporter::generate_report(&diff, &dirs[1], dirs[0].to_str().unwrap_or("旧数据"), dirs[1].to_str().unwrap_or("新数据"))?;
+    let (json_path, md_path, csv_path) = Reporter::generate_report(&diff, &dirs[1], dirs[0].to_str().unwrap_or("旧数据"), dirs[1].to_str().unwrap_or("新数据"))?;
 
-    info!("分析完成！报告已保存到: {}", dirs[1].display());
-    info!("- JSON报告: {}", dirs[1].join("diff_report.json").display());
-    info!("- 中文报告: {}", dirs[1].join("diff_report_中文.md").display());
+    info!("分析完成！报告已保存到以下位置:");
+    info!("- JSON报告: {}", json_path.display());
+    info!("- 中文报告: {}", md_path.display());
+    info!("- CSV报告: {}", csv_path.display());
 
     Ok(())
 }
@@ -105,6 +107,9 @@ fn handle_collect(args: &Args, output_dir: PathBuf) -> Result<()> {
         std::fs::File::create(&data_path)?,
         &result
     )?;
+
+    // 修改文件所有者
+    utils::fix_file_owner(&data_path)?;
 
     info!("采集完成！数据已保存到: {}", data_path.display());
 
