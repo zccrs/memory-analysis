@@ -26,6 +26,14 @@ impl Collector {
         // 创建临时目录
         std::fs::create_dir_all(&self.temp_dir)?;
 
+        // 获取当前用户名和组ID
+        let (whoami, _) = self.executor.execute_command("whoami")?;
+        let username = whoami.trim();
+
+        // 设置目录所有者为当前用户
+        self.executor.execute_sudo_command(&format!("chown -R {}:{} {:?}", username, username, self.temp_dir))?;
+        debug!("已将临时目录所有者设置为: {}", username);
+
         // 收集系统信息
         let mut system_info = self.collect_system_info()?;
 
