@@ -41,7 +41,8 @@ impl Reporter {
         report.push_str(&format!("本报告是 {} 相对于 {} 的内存使用情况。\n\n", new_identifier, old_identifier));
         report.push_str(&format!("总进程数量（{}）：{}\n", new_identifier, diff.new_processes.len() + diff.changed_processes.len()));
         report.push_str(&format!("总进程数量（{}）：{}\n", old_identifier, diff.removed_processes.len() + diff.changed_processes.len()));
-        report.push_str(&format!("新增进程数量：{}\n\n", diff.new_processes.len()));
+        report.push_str(&format!("新增进程数量：{}\n", diff.new_processes.len()));
+        report.push_str(&format!("移除进程数量：{}\n\n", diff.removed_processes.len()));
 
         report.push_str(&format!("本报告对比了 {} 和 {} 的内存使用情况。\n\n", old_identifier, new_identifier));
 
@@ -216,11 +217,15 @@ impl Reporter {
         Ok(report)
     }
 
+    fn bytes_to_mb(bytes: i64) -> String {
+        format!("{:.2}", bytes as f64 / (1024.0 * 1024.0))
+    }
+
     fn generate_csv_report(diff: &MemoryDiff, csv_path: &Path) -> Result<()> {
         let mut wtr = Writer::from_path(csv_path)?;
 
         // 写入表头
-        wtr.write_record(&["进程名", "旧内存占用", "新内存占用", "内存变化"])?;
+        wtr.write_record(&["进程名", "旧内存占用 (MB)", "新内存占用 (MB)", "内存变化 (MB)"])?;
 
         // 新增进程
         for (name, process) in &diff.new_processes {
@@ -229,7 +234,7 @@ impl Reporter {
             } else {
                 process.rss
             };
-            wtr.write_record(&[name, "0", &mem.to_string(), &mem.to_string()])?;
+            wtr.write_record(&[name, "0", &Self::bytes_to_mb(mem as i64), &Self::bytes_to_mb(mem as i64)])?;
         }
 
         // 已删除进程
@@ -239,7 +244,7 @@ impl Reporter {
             } else {
                 process.rss
             };
-            wtr.write_record(&[name, &mem.to_string(), "0", &(-(mem as i64)).to_string()])?;
+            wtr.write_record(&[name, &Self::bytes_to_mb(mem as i64), "0", &Self::bytes_to_mb(-(mem as i64))])?;
         }
 
         // 变化的进程
@@ -255,7 +260,7 @@ impl Reporter {
                 proc_diff.new_process.rss
             };
             let mem_change = (new_mem as i64) - (old_mem as i64);
-            wtr.write_record(&[name, &old_mem.to_string(), &new_mem.to_string(), &mem_change.to_string()])?;
+            wtr.write_record(&[name, &Self::bytes_to_mb(old_mem as i64), &Self::bytes_to_mb(new_mem as i64), &Self::bytes_to_mb(mem_change)])?;
         }
 
         wtr.flush()?;
