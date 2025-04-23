@@ -1,0 +1,201 @@
+use crate::analyzer::{Analyzer, MemoryDiff};
+use anyhow::Result;
+use std::path::Path;
+use std::fs;
+use serde_json;
+use log::info;
+
+pub struct Reporter;
+
+impl Reporter {
+    pub fn generate_report(diff: &MemoryDiff, output_dir: &Path) -> Result<()> {
+        info!("生成分析报告...");
+
+        // 生成 JSON 格式报告
+        let json = serde_json::to_string_pretty(diff)?;
+        fs::write(output_dir.join("diff_report.json"), json)?;
+
+        // 生成中文 Markdown 报告
+        let markdown = Self::generate_markdown_report(diff)?;
+        fs::write(output_dir.join("diff_report_中文.md"), markdown)?;
+
+        Ok(())
+    }
+
+    fn generate_markdown_report(diff: &MemoryDiff) -> Result<String> {
+        let mut report = String::new();
+
+        // 添加报告标题
+        report.push_str("# 内存使用差异分析报告\n\n");
+
+        // 总体内存差异
+        report.push_str("## 总体内存差异\n\n");
+        report.push_str(&format!("内存变化：{}\n\n",
+            Analyzer::format_bytes(diff.total_diff)));
+
+        // 系统配置变化
+        report.push_str("## 系统配置差异\n\n");
+        if diff.system_changes.kernel_version_changed {
+            report.push_str("- ⚠️ 内核版本发生变化\n");
+        }
+        if diff.system_changes.pagesize_diff != 0 {
+            report.push_str(&format!("- 页大小变化：{} 字节\n",
+                diff.system_changes.pagesize_diff));
+        }
+        if diff.system_changes.shared_memory_diff != 0 {
+            report.push_str(&format!("- 共享内存变化：{}\n",
+                Analyzer::format_bytes(diff.system_changes.shared_memory_diff)));
+        }
+        report.push('\n');
+
+        // 计算各种变化的内存占比
+        let mut total_new = 0i64;
+        let mut total_removed = 0i64;
+        let mut total_changed = 0i64;
+        let mut total_libs = 0i64;
+        let mut total_exe = 0i64;
+        let mut total_files = 0i64;
+        let mut total_shared = 0i64;
+
+        // 统计新增进程
+        for process in diff.new_processes.values() {
+            total_new += if process.pss > 0 {
+                process.pss as i64
+            } else {
+                process.rss as i64
+            };
+        }
+
+        // 统计已删除进程
+        for process in diff.removed_processes.values() {
+            total_removed -= if process.pss > 0 {
+                process.pss as i64
+            } else {
+                process.rss as i64
+            };
+        }
+
+        // 统计变化的进程
+        for proc_diff in diff.changed_processes.values() {
+            total_changed += proc_diff.memory_diff;
+            total_libs += proc_diff.library_changes.iter()
+                .map(|l| l.size_diff)
+                .sum::<i64>();
+            total_exe += proc_diff.exe_size_diff;
+            total_files += proc_diff.open_files_diff as i64 * 4096; // 估算每个文件句柄 4KB
+            total_shared += proc_diff.shared_memory_diff;
+        }
+
+        // 内存变化构成
+        report.push_str("## 内存变化构成\n\n");
+        report.push_str("### 总体变化分类\n\n");
+
+        let categories = [
+            ("新增进程", total_new),
+            ("删除进程", total_removed),
+            ("进程变化", total_changed),
+            ("动态库变化", total_libs),
+            ("可执行文件变化", total_exe),
+            ("文件句柄变化", total_files),
+            ("共享内存变化", total_shared),
+        ];
+
+        // 生成变化分类的表格
+        report.push_str("| 变化类型 | 内存变化 | 占比 |\n");
+        report.push_str("|---------|----------|------|\n");
+
+        let total_abs = categories.iter()
+            .map(|(_, size)| size.abs())
+            .sum::<i64>();
+
+        for (category, size) in categories.iter() {
+            if *size != 0 {
+                let percentage = (size.abs() as f64 / total_abs as f64 * 100.0).round();
+                report.push_str(&format!("| {} | {} | {:.1}% |\n",
+                    category,
+                    Analyzer::format_bytes(*size),
+                    percentage
+                ));
+            }
+        }
+        report.push('\n');
+
+        // 新增进程详情
+        if !diff.new_processes.is_empty() {
+            report.push_str("### 新增进程详情\n\n");
+            for (name, process) in &diff.new_processes {
+                let mem = if process.pss > 0 {
+                    process.pss
+                } else {
+                    process.rss
+                };
+                report.push_str(&format!("#### {}\n", name));
+                report.push_str(&format!("- 内存使用：{}\n", Analyzer::format_bytes(mem as i64)));
+                report.push_str(&format!("- 可执行文件：{}\n", process.exe_path.display()));
+                report.push_str(&format!("- 打开文件数：{}\n", process.open_files_count));
+                report.push_str(&format!("- 加载动态库：{} 个\n\n", process.libraries.len()));
+            }
+        }
+
+        // 已删除进程详情
+        if !diff.removed_processes.is_empty() {
+            report.push_str("### 已删除进程详情\n\n");
+            for (name, process) in &diff.removed_processes {
+                let mem = if process.pss > 0 {
+                    process.pss
+                } else {
+                    process.rss
+                };
+                report.push_str(&format!("#### {}\n", name));
+                report.push_str(&format!("- 释放内存：{}\n", Analyzer::format_bytes(mem as i64)));
+                report.push_str(&format!("- 原可执行文件：{}\n\n", process.exe_path.display()));
+            }
+        }
+
+        // 变化的进程详情
+        if !diff.changed_processes.is_empty() {
+            report.push_str("### 进程变化详情\n\n");
+            for (name, proc_diff) in &diff.changed_processes {
+                if proc_diff.memory_diff != 0 {
+                    report.push_str(&format!("#### {}\n", name));
+                    report.push_str(&format!("- 内存变化：{}\n",
+                        Analyzer::format_bytes(proc_diff.memory_diff)));
+
+                    if proc_diff.exe_size_diff != 0 {
+                        report.push_str(&format!("- 可执行文件大小变化：{}\n",
+                            Analyzer::format_bytes(proc_diff.exe_size_diff)));
+                    }
+
+                    if proc_diff.open_files_diff != 0 {
+                        report.push_str(&format!("- 打开文件数变化：{:+}\n",
+                            proc_diff.open_files_diff));
+                    }
+
+                    // 动态库变化
+                    if !proc_diff.library_changes.is_empty() {
+                        report.push_str("- 动态库变化：\n");
+                        for lib in &proc_diff.library_changes {
+                            match (&lib.old_path, &lib.new_path) {
+                                (Some(old), Some(new)) if old == new => {
+                                    report.push_str(&format!("  - 库大小变化 {}：{}\n",
+                                        old,
+                                        Analyzer::format_bytes(lib.size_diff)));
+                                }
+                                (Some(old), None) => {
+                                    report.push_str(&format!("  - 移除库 {}\n", old));
+                                }
+                                (None, Some(new)) => {
+                                    report.push_str(&format!("  - 新增库 {}\n", new));
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    report.push('\n');
+                }
+            }
+        }
+
+        Ok(report)
+    }
+}

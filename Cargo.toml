@@ -1,0 +1,19 @@
+[package]
+name = "memory-analysis"
+version = "0.1.0"
+edition = "2021"
+authors = ["Memory Analysis Team"]
+description = "A tool for analyzing memory usage differences between two Linux hosts"
+
+[dependencies]
+clap = { version = "4.4", features = ["derive"] }
+ssh2 = "0.9"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+log = "0.4"
+env_logger = "0.10"
+tokio = { version = "1.35", features = ["full"] }
+chrono = { version = "0.4", features = ["serde"] }
+byte-unit = "4.0"
+rpassword = "7.0"
