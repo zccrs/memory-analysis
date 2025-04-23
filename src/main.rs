@@ -108,7 +108,7 @@ fn handle_collect(args: &Args, output_dir: PathBuf) -> Result<()> {
     info!("开始内存采集...");
 
     // 收集当前系统状态
-    let mut collector = Collector::new(args.temp_dir.clone());
+    let mut collector = Collector::new(args.temp_dir.clone(), args.max_processes);
     let result = collector.collect()?;
 
     // 保存采集数据，使用目录名作为文件名
@@ -135,7 +135,7 @@ fn handle_collect(args: &Args, output_dir: PathBuf) -> Result<()> {
 fn handle_single_process(_args: &Args, pid: i32) -> Result<()> {
     info!("开始采集单个进程信息...");
 
-    let collector = Collector::new(PathBuf::from("/tmp"));
+    let collector = Collector::new(PathBuf::from("/tmp"), None);
     let result = collector.collect_single_process(pid)?;
     println!("\n{}", result);
 

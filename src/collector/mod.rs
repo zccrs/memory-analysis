@@ -13,6 +13,7 @@ pub use types::*;
 pub struct Collector {
     executor: Arc<Mutex<LocalExecutor>>,
     temp_dir: PathBuf,
+    max_processes: Option<usize>,
 }
 
 impl Collector {
@@ -45,10 +46,11 @@ impl Collector {
 }
 
 impl Collector {
-    pub fn new(temp_dir: PathBuf) -> Self {
+    pub fn new(temp_dir: PathBuf, max_processes: Option<usize>) -> Self {
         Self {
             executor: Arc::new(Mutex::new(LocalExecutor::new())),
             temp_dir,
+            max_processes,
         }
     }
 
@@ -199,10 +201,10 @@ impl Collector {
         let executor = self.executor.clone();
         let skipped_count = Arc::new(Mutex::new(0));
 
-        // 获取进程列表
+        // 使用ps命令获取进程列表并按RSS排序（内存使用量从大到小）
         let ps_output = {
             let executor = self.executor.lock().unwrap();
-            let (output, _) = executor.execute_command("ps -e -o pid= -o comm=")?;
+            let (output, _) = executor.execute_command("ps -e -o pid=,rss=,comm= --sort=-rss")?;
             output
         };
 
@@ -210,15 +212,10 @@ impl Collector {
         let processes: Vec<(i32, String)> = ps_output.lines()
             .filter_map(|line| {
                 // ps 命令输出的格式是: "  PID COMMAND  "，需要处理前导空格
-                let line = line.trim();
-                let mut parts = line.split_whitespace();
-                if let Some(pid_str) = parts.next() {
+                let mut parts = line.trim().split_whitespace();
+                if let (Some(pid_str), Some(_rss_str), Some(comm_str)) = (parts.next(), parts.next(), parts.next()) {
                     if let Ok(pid) = pid_str.parse::<i32>() {
-                        // 剩余部分全部作为命令名
-                        let comm = parts.collect::<Vec<&str>>().join(" ");
-                        if !comm.is_empty() {
-                            return Some((pid, comm));
-                        }
+                        return Some((pid, comm_str.to_string()));
                     }
                 }
                 None
@@ -230,16 +227,19 @@ impl Collector {
 
         let progress = Arc::new(Mutex::new(0));
 
-        // 并行处理所有进程
-        let processed_processes: HashMap<i32, ProcessInfo> = processes.par_iter()
+        // 如果指定了最大进程数量限制，截取进程列表
+        let processes_to_collect = if let Some(max) = self.max_processes {
+            info!("采集进程数量已限制为 {}", max);
+            processes.into_iter().take(max).collect::<Vec<_>>()
+        } else {
+            processes
+        };
+
+        // 并行处理进程
+        let processed_processes: HashMap<i32, ProcessInfo> = processes_to_collect.par_iter()
             .filter_map(|(pid, name)| {
-                // 跳过系统进程
-                if name.starts_with("kworker") ||
-                   name.starts_with("migration") ||
-                   name.starts_with("watchdog") ||
-                   name.starts_with("ksoftirqd") ||
-                   name.starts_with("scsi_") ||
-                   name.starts_with("kthread") {
+                // 只跳过内核工作线程
+                if name.starts_with("kworker") {
                     {
                         let mut count = skipped_count.lock().unwrap();
                         *count += 1;

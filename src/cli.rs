@@ -24,6 +24,10 @@ pub struct Args {
     /// 单进程模式：指定进程ID，直接在终端输出采集结果
     #[arg(long = "pid", group = "mode")]
     pub pid: Option<i32>,
+
+    /// 最大采集进程数量，达到后终止采集
+    #[arg(long = "max-processes")]
+    pub max_processes: Option<usize>,
 }
 
 impl Args {

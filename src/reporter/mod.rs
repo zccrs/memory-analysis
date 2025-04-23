@@ -38,6 +38,30 @@ impl Reporter {
 
         // 添加报告标题
         report.push_str("# 内存使用差异分析报告\n\n");
+
+        // 添加内存统计方式说明
+        report.push_str("## 关于内存统计方式\n\n");
+        report.push_str("本工具使用以下方式统计内存：\n\n");
+        report.push_str("1. **进程内存计算方式**\n");
+        report.push_str("   - 优先使用 PSS (Proportional Set Size) 来计算进程内存\n");
+        report.push_str("   - PSS 会将共享内存按比例分配给各个进程，更准确反映实际占用\n");
+        report.push_str("   - 这与 top 命令使用的 RSS (Resident Set Size) 不同\n");
+        report.push_str("   - RSS 会将共享内存完全计入每个进程，可能导致总和偏大\n\n");
+        report.push_str("2. **数据来源**\n");
+        report.push_str("   - 进程 PSS/RSS：/proc/{pid}/smaps\n");
+        report.push_str("   - 系统总内存：/proc/meminfo\n");
+        report.push_str("   - 进程内存总和 = 所有进程的 PSS 总和\n");
+        report.push_str("   - 内核内存 = 系统总使用内存 - 进程内存总和\n\n");
+        report.push_str("3. **统计范围说明**\n");
+        report.push_str("   - 跳过 kworker 等内核工作线程\n");
+        report.push_str("   - 可通过 --max-processes 参数限制采集进程数量\n");
+        report.push_str("   - 被跳过的进程数量会记录在统计信息中\n\n");
+
+        report.push_str("4. **进程状态说明**\n");
+        report.push_str("   - "进程已终止"：表示该进程在第一次采集时存在，但在第二次采集时已不存在\n");
+        report.push_str("   - 这类进程会显示释放的内存大小和原可执行文件路径\n");
+        report.push_str("   - 进程终止通常意味着其占用的内存已被释放\n\n");
+
         report.push_str(&format!("本报告是 {} 相对于 {} 的内存使用情况。\n\n", new_identifier, old_identifier));
         report.push_str(&format!("总进程数量（{}）：{}\n", new_identifier, diff.new_processes.len() + diff.changed_processes.len()));
         report.push_str(&format!("总进程数量（{}）：{}\n", old_identifier, diff.removed_processes.len() + diff.changed_processes.len()));
@@ -45,26 +69,6 @@ impl Reporter {
         report.push_str(&format!("移除进程数量：{}\n\n", diff.removed_processes.len()));
 
         report.push_str(&format!("本报告对比了 {} 和 {} 的内存使用情况。\n\n", old_identifier, new_identifier));
-
-        // 总体内存差异
-        report.push_str("## 总体内存差异\n\n");
-        report.push_str(&format!("内存变化：{}\n\n",
-            Analyzer::format_bytes(diff.total_diff)));
-
-        // 系统配置变化
-        report.push_str("## 系统配置差异\n\n");
-        if diff.system_changes.kernel_version_changed {
-            report.push_str("- ⚠️ 内核版本发生变化\n");
-        }
-        if diff.system_changes.pagesize_diff != 0 {
-            report.push_str(&format!("- 页大小变化：{} 字节\n",
-                diff.system_changes.pagesize_diff));
-        }
-        if diff.system_changes.shared_memory_diff != 0 {
-            report.push_str(&format!("- 共享内存变化：{}\n",
-                Analyzer::format_bytes(diff.system_changes.shared_memory_diff)));
-        }
-        report.push('\n');
 
         // 计算各种变化的内存占比
         let mut total_new = 0i64;
@@ -104,6 +108,58 @@ impl Reporter {
             total_shared += proc_diff.shared_memory_diff;
         }
 
+        // 总体内存差异
+        report.push_str("## 总体内存差异\n\n");
+
+        // 计算实际内存变化的组成
+        let process_memory_change = total_new + total_removed + total_changed;
+        let libs_and_exe_change = total_libs + total_exe;
+        let other_change = total_files + total_shared;
+        let kernel_change = diff.total_diff - process_memory_change - libs_and_exe_change - other_change;
+
+        report.push_str("```diff\n");
+        report.push_str(&format!("+ 新增进程内存：{}\n", Analyzer::format_bytes(total_new)));
+        report.push_str(&format!("- 移除进程内存：{}\n", Analyzer::format_bytes(total_removed)));
+        report.push_str(&format!("@ 现有进程变化：{}\n", Analyzer::format_bytes(total_changed)));
+        report.push_str(&format!("  动态库变化：   {}\n", Analyzer::format_bytes(total_libs)));
+        report.push_str(&format!("  其他资源变化： {}\n", Analyzer::format_bytes(other_change)));
+        report.push_str(&format!("  内核空间变化： {}\n", Analyzer::format_bytes(kernel_change)));
+        report.push_str("-------------------\n");
+        report.push_str(&format!("  总内存变化：   {}\n", Analyzer::format_bytes(diff.total_diff)));
+        report.push_str("```\n\n");
+        report.push_str("**内存变化详细分析**\n\n");
+        report.push_str("1. **进程内存变化**\n");
+        report.push_str(&format!("   - 新增进程：{}\n", Analyzer::format_bytes(total_new)));
+        report.push_str(&format!("   - 删除进程：{}\n", Analyzer::format_bytes(total_removed)));
+        report.push_str(&format!("   - 现有进程变化：{}\n", Analyzer::format_bytes(total_changed)));
+        report.push_str(&format!("   - 小计：{}\n", Analyzer::format_bytes(process_memory_change)));
+        report.push_str("\n2. **可执行文件和动态库变化**\n");
+        report.push_str(&format!("   - 动态库变化：{}\n", Analyzer::format_bytes(total_libs)));
+        report.push_str(&format!("   - 可执行文件变化：{}\n", Analyzer::format_bytes(total_exe)));
+        report.push_str(&format!("   - 小计：{}\n", Analyzer::format_bytes(libs_and_exe_change)));
+        report.push_str("\n3. **其他资源变化**\n");
+        report.push_str(&format!("   - 文件句柄：{}\n", Analyzer::format_bytes(total_files)));
+        report.push_str(&format!("   - 共享内存：{}\n", Analyzer::format_bytes(total_shared)));
+        report.push_str(&format!("   - 小计：{}\n", Analyzer::format_bytes(other_change)));
+        report.push_str("\n4. **内核内存变化**\n");
+        report.push_str(&format!("   - 内核空间：{}\n", Analyzer::format_bytes(kernel_change)));
+        report.push_str("   - 包括：内核数据结构、缓存、内核模块等\n\n");
+
+        // 系统配置变化
+        report.push_str("## 系统配置差异\n\n");
+        if diff.system_changes.kernel_version_changed {
+            report.push_str("- ⚠️ 内核版本发生变化\n");
+        }
+        if diff.system_changes.pagesize_diff != 0 {
+            report.push_str(&format!("- 页大小变化：{} 字节\n",
+                diff.system_changes.pagesize_diff));
+        }
+        if diff.system_changes.shared_memory_diff != 0 {
+            report.push_str(&format!("- 共享内存变化：{}\n",
+                Analyzer::format_bytes(diff.system_changes.shared_memory_diff)));
+        }
+        report.push('\n');
+
         // 内存变化构成
         report.push_str("## 内存变化构成\n\n");
         report.push_str("### 总体变化分类\n\n");
@@ -138,39 +194,41 @@ impl Reporter {
         }
         report.push('\n');
 
-        // 新增进程详情
-        if !diff.new_processes.is_empty() {
-            report.push_str("### 新增进程详情\n\n");
-            for (name, process) in &diff.new_processes {
-                let mem = if process.pss > 0 {
-                    process.pss
-                } else {
-                    process.rss
-                };
-                report.push_str(&format!("#### {}\n", name));
-                report.push_str(&format!("- 内存使用：{}\n", Analyzer::format_bytes(mem as i64)));
+        // 按内存变化大小排序的进程详情
+        let mut sorted_processes = Vec::new();
+
+        // 收集所有进程信息并计算内存变化
+        for (name, process) in &diff.new_processes {
+            let mem = if process.pss > 0 { process.pss } else { process.rss } as i64;
+            sorted_processes.push((name, mem, true, process));
+        }
+        for (name, process) in &diff.removed_processes {
+            let mem = if process.pss > 0 { process.pss } else { process.rss } as i64;
+            sorted_processes.push((name, -mem, false, process));
+        }
+        for (name, proc_diff) in &diff.changed_processes {
+            sorted_processes.push((name, proc_diff.memory_diff, true, &proc_diff.new_process));
+        }
+
+        // 按内存变化大小排序（绝对值降序）
+        sorted_processes.sort_by_key(|(_, mem, _, _)| -mem.abs());
+
+        // 打印详细信息
+        report.push_str("### 进程内存变化详情（按变化量排序）\n\n");
+        for (name, mem_change, is_current, process) in sorted_processes {
+            report.push_str(&format!("#### {} ({:+})\n", name, Analyzer::format_bytes(mem_change)));
+            if is_current {
                 report.push_str(&format!("- 可执行文件：{}\n", process.exe_path.display()));
                 report.push_str(&format!("- 打开文件数：{}\n", process.open_files_count));
-                report.push_str(&format!("- 加载动态库：{} 个\n\n", process.libraries.len()));
+                report.push_str(&format!("- 加载动态库：{} 个\n", process.libraries.len()));
+            } else {
+                report.push_str("- 进程已终止\n");
+                report.push_str(&format!("- 原可执行文件：{}\n", process.exe_path.display()));
             }
+            report.push_str("\n");
         }
 
-        // 已删除进程详情
-        if !diff.removed_processes.is_empty() {
-            report.push_str("### 已删除进程详情\n\n");
-            for (name, process) in &diff.removed_processes {
-                let mem = if process.pss > 0 {
-                    process.pss
-                } else {
-                    process.rss
-                };
-                report.push_str(&format!("#### {}\n", name));
-                report.push_str(&format!("- 释放内存：{}\n", Analyzer::format_bytes(mem as i64)));
-                report.push_str(&format!("- 原可执行文件：{}\n\n", process.exe_path.display()));
-            }
-        }
-
-        // 所有进程详情（包括无变化的进程）
+        // 变化的进程的详细信息
         if !diff.changed_processes.is_empty() {
             report.push_str("### 进程详情\n\n");
             for (name, proc_diff) in &diff.changed_processes {

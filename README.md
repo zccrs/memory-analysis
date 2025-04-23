@@ -152,6 +152,7 @@ memory-analysis [输出目录|选项]
     --pid <PID>            单进程模式：指定进程ID，直接输出该进程的内存使用情况
     --log-level <LEVEL>     日志级别 (debug, info, warn, error) [默认: info]
     --temp-dir <DIR>        临时目录 [默认: /tmp/memdiff]
+    --max-processes <NUM>    限制采集进程的最大数量
 ```
 
 ### 单进程分析示例
