@@ -24,8 +24,8 @@ BINARY_NAME="memory-analysis"
 # 确保本地结果目录存在
 mkdir -p "$LOCAL_RESULT_DIR"
 
-echo "Step 1: 编译最新版本..."
-cargo build --release || {
+echo "Step 1: 编译最新版本(静态链接)..."
+RUSTFLAGS='-C target-feature=+crt-static' cargo build --release --target x86_64-unknown-linux-gnu || {
     echo "错误: 编译失败"
     exit 1
 }
@@ -37,14 +37,14 @@ ssh "$REMOTE_HOST" "mkdir -p $REMOTE_TEMP_DIR" || {
 }
 
 echo "Step 3: 复制程序到远程主机..."
-scp "./target/release/$BINARY_NAME" "$REMOTE_HOST:$REMOTE_TEMP_DIR/" || {
+scp "./target/x86_64-unknown-linux-gnu/release/$BINARY_NAME" "$REMOTE_HOST:$REMOTE_TEMP_DIR/" || {
     echo "错误: 无法复制程序到远程主机"
     ssh "$REMOTE_HOST" "rm -rf $REMOTE_TEMP_DIR"
     exit 1
 }
 
 echo "Step 4: 在远程主机上执行程序..."
-ssh "$REMOTE_HOST" "cd $REMOTE_TEMP_DIR && chmod +x $BINARY_NAME && ./$BINARY_NAME ." || {
+ssh "$REMOTE_HOST" "cd $REMOTE_TEMP_DIR && chmod +x $BINARY_NAME && sudo ./$BINARY_NAME ." || {
     echo "错误: 远程执行失败"
     ssh "$REMOTE_HOST" "rm -rf $REMOTE_TEMP_DIR"
     exit 1
