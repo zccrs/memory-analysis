@@ -20,9 +20,27 @@ REMOTE_HOST="$1"
 LOCAL_RESULT_DIR="$2"
 REMOTE_TEMP_DIR="/tmp/memory-analysis-$(date +%s)"
 BINARY_NAME="memory-analysis"
+SSH_CONTROL_PATH="/tmp/ssh-memory-analysis-$$.socket"
+
+# 清理函数
+cleanup() {
+    # 清理远程临时目录
+    ssh -o "ControlPath=$SSH_CONTROL_PATH" "$REMOTE_HOST" "rm -rf $REMOTE_TEMP_DIR" 2>/dev/null
+    # 关闭SSH主连接
+    ssh -O exit -o "ControlPath=$SSH_CONTROL_PATH" "$REMOTE_HOST" 2>/dev/null
+    # 删除控制socket
+    rm -f "$SSH_CONTROL_PATH"
+}
+
+# 设置清理钩子
+trap cleanup EXIT
 
 # 确保本地结果目录存在
 mkdir -p "$LOCAL_RESULT_DIR"
+
+echo "Step 1: 建立SSH连接..."
+# 创建主SSH连接
+ssh -nNf -o "ControlMaster=yes" -o "ControlPath=$SSH_CONTROL_PATH" "$REMOTE_HOST"
 
 echo "Step 1: 编译最新版本(静态链接)..."
 RUSTFLAGS='-C target-feature=+crt-static' cargo build --release --target x86_64-unknown-linux-gnu || {
@@ -31,33 +49,31 @@ RUSTFLAGS='-C target-feature=+crt-static' cargo build --release --target x86_64-
 }
 
 echo "Step 2: 创建远程临时目录..."
-ssh "$REMOTE_HOST" "mkdir -p $REMOTE_TEMP_DIR" || {
+ssh -o "ControlPath=$SSH_CONTROL_PATH" "$REMOTE_HOST" "mkdir -p $REMOTE_TEMP_DIR" || {
     echo "错误: 无法在远程主机上创建目录"
     exit 1
 }
 
 echo "Step 3: 复制程序到远程主机..."
-scp "./target/x86_64-unknown-linux-gnu/release/$BINARY_NAME" "$REMOTE_HOST:$REMOTE_TEMP_DIR/" || {
+scp -o "ControlPath=$SSH_CONTROL_PATH" "./target/x86_64-unknown-linux-gnu/release/$BINARY_NAME" "$REMOTE_HOST:$REMOTE_TEMP_DIR/" || {
     echo "错误: 无法复制程序到远程主机"
     ssh "$REMOTE_HOST" "rm -rf $REMOTE_TEMP_DIR"
     exit 1
 }
 
 echo "Step 4: 在远程主机上执行程序..."
-ssh -t "$REMOTE_HOST" "cd $REMOTE_TEMP_DIR && chmod +x $BINARY_NAME && sudo ./$BINARY_NAME ." || {
+ssh -t -o "ControlPath=$SSH_CONTROL_PATH" "$REMOTE_HOST" "cd $REMOTE_TEMP_DIR && chmod +x $BINARY_NAME && sudo ./$BINARY_NAME ." || {
     echo "错误: 远程执行失败"
     ssh "$REMOTE_HOST" "rm -rf $REMOTE_TEMP_DIR"
     exit 1
 }
 
 echo "Step 5: 复制结果文件到本地..."
-scp -r "$REMOTE_HOST:$REMOTE_TEMP_DIR/*" "$LOCAL_RESULT_DIR/" || {
+scp -o "ControlPath=$SSH_CONTROL_PATH" -r "$REMOTE_HOST:$REMOTE_TEMP_DIR/*" "$LOCAL_RESULT_DIR/" || {
     echo "错误: 无法复制结果文件"
     ssh "$REMOTE_HOST" "rm -rf $REMOTE_TEMP_DIR"
     exit 1
 }
 
-echo "Step 6: 清理远程临时文件..."
-ssh "$REMOTE_HOST" "rm -rf $REMOTE_TEMP_DIR"
-
 echo "完成！结果文件已保存到: $LOCAL_RESULT_DIR"
+# cleanup会在脚本退出时自动执行
