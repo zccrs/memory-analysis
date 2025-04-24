@@ -39,6 +39,7 @@ pub struct SystemInfo {
     pub kernel_file_size: u64,  // 内核文件大小
     pub initrd_file_size: u64,  // initrd文件大小
     pub skipped_processes: usize,
+    pub total_processes: usize,  // 系统中的总进程数
     pub collection_time: chrono::DateTime<chrono::Utc>,
 }
 

@@ -76,6 +76,7 @@ impl Collector {
         // 收集进程信息
         let (processes, skipped_count) = self.collect_processes()?;
         system_info.skipped_processes = skipped_count;
+        system_info.total_processes = processes.len();
 
         // 计算进程内存总和（使用PSS）
         system_info.processes_memory = processes.values()
@@ -319,6 +320,7 @@ impl Collector {
             kernel_file_size,
             initrd_file_size,
             skipped_processes: 0,   // 将在collect_processes中更新
+            total_processes: 0,     // 将在collect_processes后更新
             collection_time: chrono::Utc::now(),
         })
     }
