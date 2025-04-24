@@ -124,7 +124,7 @@ impl Analyzer {
                 } else {
                     Self::extract_base_name(&p.exe_path.to_string_lossy())
                 };
-                (key, p.clone())
+                ((p.pid, key), p.clone())
             })
             .collect();
 
@@ -136,40 +136,41 @@ impl Analyzer {
                 } else {
                     Self::extract_base_name(&p.exe_path.to_string_lossy())
                 };
-                (key, p.clone())
+                ((p.pid, key), p.clone())
             })
             .collect();
 
         debug!("原始的旧进程数量: {}, 原始的新进程数量: {}", old_processes.len(), new_processes.len());
         debug!("解析后的旧进程数量: {}, 解析后的新进程数量: {}", old_by_key.len(), new_by_key.len());
 
+        let mut usedOldPids = Vec::new();
         // 遍历新进程，查找新增和变化的进程
         for (key, new_process) in &new_by_key {
-            if let Some(old_process) = old_by_key.get(key) {
-                // 进程存在于两个系统中，检查是否有变化
-                Self::analyze_process_diff(old_process, new_process, diff)?;
+            let mut same_process = false;
+            let mut found_process = None;
+            for (old_key, old_process) in &old_by_key {
+                if key.1 == old_key.1 && !usedOldPids.contains(&old_key.0) {
+                    found_process = Some(old_process);
+                    same_process = true;
+                    usedOldPids.push(old_key.0);
+                    break;
+                }
+            }
+
+            if same_process {
+                Self::analyze_process_diff(found_process.unwrap(), new_process, diff)?;
             } else {
                 // 新增进程
                 // 使用进程的原始标识作为map的key
-                let process_key = if Reporter::is_kernel_process(new_process) {
-                    new_process.name.clone()
-                } else {
-                    new_process.exe_path.to_string_lossy().to_string()
-                };
-                diff.new_processes.insert(process_key, new_process.clone());
+                diff.new_processes.insert(new_process.hash_key_string(), new_process.clone());
             }
         }
 
         // 查找已删除的进程
         for (key, old_process) in &old_by_key {
-            if !new_by_key.contains_key(key) {
+            if !usedOldPids.contains(&key.0) {
                 // 使用进程的原始标识作为map的key
-                let process_key = if Reporter::is_kernel_process(old_process) {
-                    old_process.name.clone()
-                } else {
-                    old_process.exe_path.to_string_lossy().to_string()
-                };
-                diff.removed_processes.insert(process_key, old_process.clone());
+                diff.removed_processes.insert(old_process.hash_key_string(), old_process.clone());
             }
         }
 
@@ -236,30 +237,17 @@ impl Analyzer {
             }
         }
 
-        // 只记录确实发生变化的进程
-        if memory_diff != 0
-            || !library_changes.is_empty()
-            || new_proc.exe_size != old_proc.exe_size
-            || new_proc.open_files_count != old_proc.open_files_count
-            || new_proc.shared_memory != old_proc.shared_memory {
-            let key = if Reporter::is_kernel_process(new_proc) {
-                new_proc.name.clone()
-            } else {
-                new_proc.exe_path.to_string_lossy().to_string()
-            };
-            diff.changed_processes.insert(
-                key,
-                ProcessDiff {
-                old_process: old_proc.clone(),
-                new_process: new_proc.clone(),
-                memory_diff,
-                library_changes,
-                exe_size_diff: new_proc.exe_size as i64 - old_proc.exe_size as i64,
-                open_files_diff: new_proc.open_files_count as i32 - old_proc.open_files_count as i32,
-                shared_memory_diff: new_proc.shared_memory as i64 - old_proc.shared_memory as i64,
-            },
-        );
-        }
+        diff.changed_processes.insert(
+            format!("{} -> {}", old_proc.hash_key_string(), new_proc.hash_key_string()),
+            ProcessDiff {
+            old_process: old_proc.clone(),
+            new_process: new_proc.clone(),
+            memory_diff,
+            library_changes,
+            exe_size_diff: new_proc.exe_size as i64 - old_proc.exe_size as i64,
+            open_files_diff: new_proc.open_files_count as i32 - old_proc.open_files_count as i32,
+            shared_memory_diff: new_proc.shared_memory as i64 - old_proc.shared_memory as i64,
+        },);
 
         Ok(())
     }
