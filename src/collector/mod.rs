@@ -77,16 +77,22 @@ impl Collector {
         let (processes, skipped_count) = self.collect_processes()?;
         system_info.skipped_processes = skipped_count;
 
-        // 计算进程内存总和（PSS已经是字节单位）
+        // 计算进程内存总和（使用PSS）
         system_info.processes_memory = processes.values()
             .map(|p| p.pss)
             .sum();
 
-        // 计算内核占用的内存（总使用内存 - 进程内存总和）
+        // 计算内核占用的内存
         system_info.kernel_memory = system_info.used_memory.saturating_sub(system_info.processes_memory);
 
-        info!("进程内存总量: {} MB", system_info.processes_memory / 1024 / 1024);
-        info!("内核内存占用: {} MB", system_info.kernel_memory / 1024 / 1024);
+        info!("系统内存概况:");
+        info!("- 总物理内存: {} MB", system_info.total_memory / 1024 / 1024);
+        info!("- 已用内存: {} MB", system_info.used_memory / 1024 / 1024);
+        info!("- 剩余内存: {} MB", (system_info.total_memory - system_info.used_memory) / 1024 / 1024);
+        info!("\n实际进程内存使用:");
+        info!("- 进程内存总量(PSS): {} MB", system_info.processes_memory / 1024 / 1024);
+        info!("- 内核内存占用: {} MB", system_info.kernel_memory / 1024 / 1024);
+        info!("- 共享内存总量: {} MB", system_info.total_shared_memory / 1024 / 1024);
 
         Ok(CollectionResult {
             system_info,

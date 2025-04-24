@@ -1,4 +1,4 @@
-use crate::collector::{CollectionResult, ProcessInfo};
+use crate::collector::{CollectionResult, ProcessInfo, SystemInfo};
 use anyhow::Result;
 use log::{info, debug};
 use std::collections::HashMap;
@@ -15,6 +15,8 @@ pub struct MemoryDiff {
     pub current_user_id: u32,
     pub old_os_release: String,  // 旧系统版本名称
     pub new_os_release: String,  // 新系统版本名称
+    pub old_system_info: SystemInfo,  // 旧系统信息
+    pub new_system_info: SystemInfo,  // 新系统信息
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -85,8 +87,10 @@ impl Analyzer {
                 new_initramfs_size: Some(host2_data.system_info.initrd_file_size as i64),
             },
             current_user_id: unsafe { libc::geteuid() },
-            old_os_release: host1_data.system_info.os_release,
-            new_os_release: host2_data.system_info.os_release,
+            old_os_release: host1_data.system_info.os_release.clone(),
+            new_os_release: host2_data.system_info.os_release.clone(),
+            old_system_info: host1_data.system_info.clone(),
+            new_system_info: host2_data.system_info.clone(),
         };
 
         // 分析进程变化

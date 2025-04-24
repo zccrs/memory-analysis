@@ -104,8 +104,11 @@ impl Reporter {
         };
 
         report.push_str(&format!("本报告是 {} 相对于 {} 的内存使用情况。\n\n", new_name, old_name));
-        report.push_str(&format!("总进程数量（{}）：{}\n", new_name, diff.new_processes.len() + diff.changed_processes.len()));
-        report.push_str(&format!("总进程数量（{}）：{}\n", old_name, diff.removed_processes.len() + diff.changed_processes.len()));
+        // 统计新旧系统的总进程数（包括被跳过的进程）
+        let new_total = diff.new_processes.len() + diff.changed_processes.len() + diff.new_system_info.skipped_processes;
+        let old_total = diff.removed_processes.len() + diff.changed_processes.len() + diff.old_system_info.skipped_processes;
+        report.push_str(&format!("总进程数量（{}）：{}\n", new_name, new_total));
+        report.push_str(&format!("总进程数量（{}）：{}\n", old_name, old_total));
         report.push_str(&format!("新增进程数量：{}\n", diff.new_processes.len()));
         report.push_str(&format!("移除进程数量：{}\n\n", diff.removed_processes.len()));
 
@@ -142,31 +145,71 @@ impl Reporter {
             .filter(|p| !Self::is_kernel_process(p) && p.user_id == diff.current_user_id)
             .count();
 
-        report.push_str(&format!("- 总进程数：{}\n", old_total));
+        report.push_str(&format!("- CPU信息：{}\n", diff.old_system_info.cpu_info));
+        report.push_str(&format!("- 主机名：{}\n", diff.old_system_info.hostname));
+        report.push_str(&format!("- 内核版本：{}\n", diff.old_system_info.kernel_version));
+        report.push_str(&format!("- 操作系统：{}\n", diff.old_system_info.os_release));
+        report.push_str(&format!("- 页大小：{}\n", Analyzer::format_bytes(diff.old_system_info.page_size as i64)));
+        report.push_str("- 系统内存：\n");
+        report.push_str(&format!("  - 总内存：{}\n", Analyzer::format_bytes(diff.old_system_info.total_memory as i64)));
+        report.push_str(&format!("  - 已使用内存：{}\n", Analyzer::format_bytes(diff.old_system_info.used_memory as i64)));
+        report.push_str(&format!("  - 可用内存：{}\n", Analyzer::format_bytes((diff.old_system_info.total_memory - diff.old_system_info.used_memory) as i64)));
+        report.push_str(&format!("  - 内核内存：{}\n", Analyzer::format_bytes(diff.old_system_info.kernel_memory as i64)));
+        report.push_str(&format!("  - 进程总内存：{}\n", Analyzer::format_bytes(diff.old_system_info.processes_memory as i64)));
+        report.push_str(&format!("  - 共享内存总量：{}\n", Analyzer::format_bytes(diff.old_system_info.total_shared_memory as i64)));
+        report.push_str(&format!("- 进程信息：\n"));
+        report.push_str(&format!("  - 总进程数：{}\n", old_total));
         report.push_str(&format!("  - 内核进程：{}\n", old_kernel_count));
         report.push_str(&format!("  - 系统进程：{} (非用户进程)\n", old_system_count));
-        report.push_str(&format!("  - 用户进程：{}\n\n", old_user_count));
+        report.push_str(&format!("  - 用户进程：{}\n", old_user_count));
+        report.push_str(&format!("  - 被跳过的进程：{}\n", diff.old_system_info.skipped_processes));
+        report.push_str(&format!("- 内核文件信息：\n"));
+        report.push_str(&format!("  - 内核文件大小：{}\n", Analyzer::format_bytes(diff.old_system_info.kernel_file_size as i64)));
+        report.push_str(&format!("  - Initrd文件大小：{}\n\n", Analyzer::format_bytes(diff.old_system_info.initrd_file_size as i64)));
 
         // 新系统信息
         report.push_str(&format!("## {}\n\n", new_name));
-        let new_total = diff.new_processes.len() + diff.changed_processes.len();
-        let new_kernel_count = diff.new_processes.values()
+        // 统计新系统中的实际总进程数
+        let new_total = diff.new_processes.len() + diff.changed_processes.len() + diff.new_system_info.skipped_processes;
+
+        // 获取所有新系统的进程
+        // 包括新增的进程和更改后的进程
+        let processes_new_system = diff.new_processes.values()
             .chain(diff.changed_processes.values().map(|p| &p.new_process))
+            .collect::<Vec<_>>();
+
+        // 统计不同类型的进程数量
+        let new_kernel_count = processes_new_system.iter()
             .filter(|p| Self::is_kernel_process(p))
             .count();
-        let new_system_count = diff.new_processes.values()
-            .chain(diff.changed_processes.values().map(|p| &p.new_process))
+        let new_system_count = processes_new_system.iter()
             .filter(|p| !Self::is_kernel_process(p) && p.user_id != diff.current_user_id)
             .count();
-        let new_user_count = diff.new_processes.values()
-            .chain(diff.changed_processes.values().map(|p| &p.new_process))
+        let new_user_count = processes_new_system.iter()
             .filter(|p| !Self::is_kernel_process(p) && p.user_id == diff.current_user_id)
             .count();
 
-        report.push_str(&format!("- 总进程数：{}\n", new_total));
+        report.push_str(&format!("- CPU信息：{}\n", diff.new_system_info.cpu_info));
+        report.push_str(&format!("- 主机名：{}\n", diff.new_system_info.hostname));
+        report.push_str(&format!("- 内核版本：{}\n", diff.new_system_info.kernel_version));
+        report.push_str(&format!("- 操作系统：{}\n", diff.new_system_info.os_release));
+        report.push_str(&format!("- 页大小：{}\n", Analyzer::format_bytes(diff.new_system_info.page_size as i64)));
+        report.push_str("- 系统内存：\n");
+        report.push_str(&format!("  - 总内存：{}\n", Analyzer::format_bytes(diff.new_system_info.total_memory as i64)));
+        report.push_str(&format!("  - 已使用内存：{}\n", Analyzer::format_bytes(diff.new_system_info.used_memory as i64)));
+        report.push_str(&format!("  - 可用内存：{}\n", Analyzer::format_bytes((diff.new_system_info.total_memory - diff.new_system_info.used_memory) as i64)));
+        report.push_str(&format!("  - 内核内存：{}\n", Analyzer::format_bytes(diff.new_system_info.kernel_memory as i64)));
+        report.push_str(&format!("  - 进程总内存：{}\n", Analyzer::format_bytes(diff.new_system_info.processes_memory as i64)));
+        report.push_str(&format!("  - 共享内存总量：{}\n", Analyzer::format_bytes(diff.new_system_info.total_shared_memory as i64)));
+        report.push_str(&format!("- 进程信息：\n"));
+        report.push_str(&format!("  - 总进程数：{}\n", new_total));
         report.push_str(&format!("  - 内核进程：{}\n", new_kernel_count));
         report.push_str(&format!("  - 系统进程：{} (非用户进程)\n", new_system_count));
-        report.push_str(&format!("  - 用户进程：{}\n\n", new_user_count));
+        report.push_str(&format!("  - 用户进程：{}\n", new_user_count));
+        report.push_str(&format!("  - 被跳过的进程：{}\n", diff.new_system_info.skipped_processes));
+        report.push_str(&format!("- 内核文件信息：\n"));
+        report.push_str(&format!("  - 内核文件大小：{}\n", Analyzer::format_bytes(diff.new_system_info.kernel_file_size as i64)));
+        report.push_str(&format!("  - Initrd文件大小：{}\n\n", Analyzer::format_bytes(diff.new_system_info.initrd_file_size as i64)));
 
         // 计算各类进程的内存使用情况
         let mut kernel_total = 0i64;      // 内核线程
@@ -225,11 +268,25 @@ impl Reporter {
         // 计算进程部分总的内存变化
         let process_total = kernel_total + system_total + user_total;
 
-        // 计算其他部分的内存变化（系统总变化减去进程变化）
-        let other_total = diff.total_diff - process_total;
+        // 计算内核文件变化
+        let kernel_files_diff = {
+            let mut total = 0i64;
+            if let (Some(old_kernel), Some(new_kernel)) = (diff.system_changes.old_kernel_size, diff.system_changes.new_kernel_size) {
+                total += new_kernel - old_kernel;
+            }
+            if let (Some(old_initrd), Some(new_initrd)) = (diff.system_changes.old_initramfs_size, diff.system_changes.new_initramfs_size) {
+                total += new_initrd - old_initrd;
+            }
+            total
+        };
+
+        // 计算其他部分的内存变化（系统总变化减去进程变化和内核文件变化）
+        let other_total = diff.total_diff - process_total - kernel_files_diff;
 
         // 内核部分
         report.push_str("# 内核内存变化\n");
+
+        // 内核进程变化
         let kernel_change_str = Analyzer::format_bytes(kernel_total);
         if kernel_total > 0 {
             report.push_str(&format!("+ 内核进程内存变化：{}\n", kernel_change_str));
@@ -237,6 +294,22 @@ impl Reporter {
             report.push_str(&format!("- 内核进程内存变化：{}\n", kernel_change_str));
         } else {
             report.push_str(&format!("  内核进程内存变化：{}\n", kernel_change_str));
+        }
+
+        // 内核文件变化
+        let kernel_files_str = Analyzer::format_bytes(kernel_files_diff);
+        if kernel_files_diff > 0 {
+            report.push_str(&format!("+ 内核文件变化：{}\n", kernel_files_str));
+        } else if kernel_files_diff < 0 {
+            report.push_str(&format!("- 内核文件变化：{}\n", kernel_files_str));
+        } else {
+            report.push_str(&format!("  内核文件变化：{}\n", kernel_files_str));
+        }
+
+        let total_kernel_change = kernel_total + kernel_files_diff;
+        let total_kernel_str = Analyzer::format_bytes(total_kernel_change);
+        if total_kernel_change != 0 {
+            report.push_str(&format!("  总内核内存变化：{}\n", total_kernel_str));
         }
 
         // 系统部分

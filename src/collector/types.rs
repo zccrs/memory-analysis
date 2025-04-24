@@ -42,7 +42,7 @@ pub struct SystemInfo {
     pub collection_time: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CollectionResult {
     pub system_info: SystemInfo,
     pub processes: HashMap<i32, ProcessInfo>,
