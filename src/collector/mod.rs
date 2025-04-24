@@ -87,13 +87,13 @@ impl Collector {
         system_info.kernel_memory = system_info.used_memory.saturating_sub(system_info.processes_memory);
 
         info!("系统内存概况:");
-        info!("- 总物理内存: {} MB", system_info.total_memory / 1024 / 1024);
-        info!("- 已用内存: {} MB", system_info.used_memory / 1024 / 1024);
-        info!("- 剩余内存: {} MB", (system_info.total_memory - system_info.used_memory) / 1024 / 1024);
+        info!("- 总物理内存: {}", format_size(system_info.total_memory));
+        info!("- 已用内存: {}", format_size(system_info.used_memory));
+        info!("- 剩余内存: {}", format_size(system_info.total_memory - system_info.used_memory));
         info!("\n实际进程内存使用:");
-        info!("- 进程内存总量(PSS): {} MB", system_info.processes_memory / 1024 / 1024);
-        info!("- 内核内存占用: {} MB", system_info.kernel_memory / 1024 / 1024);
-        info!("- 共享内存总量: {} MB", system_info.total_shared_memory / 1024 / 1024);
+        info!("- 进程内存总量(PSS): {}", format_size(system_info.processes_memory));
+        info!("- 内核内存占用: {}", format_size(system_info.kernel_memory));
+        info!("- 共享内存总量: {}", format_size(system_info.total_shared_memory));
 
         Ok(CollectionResult {
             system_info,
@@ -593,10 +593,12 @@ fn parse_meminfo(content: &str) -> Result<(u64, u64)> {
     for line in content.lines() {
         if line.starts_with("MemTotal:") {
             if let Some(kb) = line.split_whitespace().nth(1) {
+                // 从 KB 转换为字节 (1KB = 1024B)
                 total = kb.parse::<u64>()? * 1024;
             }
         } else if line.starts_with("MemAvailable:") {
             if let Some(kb) = line.split_whitespace().nth(1) {
+                // 从 KB 转换为字节 (1KB = 1024B)
                 available = kb.parse::<u64>()? * 1024;
             }
         }
@@ -610,10 +612,17 @@ fn parse_meminfo(content: &str) -> Result<(u64, u64)> {
 }
 
 fn format_size(bytes: u64) -> String {
-    if bytes >= 1024 * 1024 {
-        format!("{:.1} MB", bytes as f64 / 1024.0 / 1024.0)
-    } else if bytes >= 1024 {
-        format!("{:.1} KB", bytes as f64 / 1024.0)
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * KB;
+    const GB: f64 = MB * KB;
+
+    let bytes_f64 = bytes as f64;
+    if bytes_f64 >= GB {
+        format!("{:.1} GB", bytes_f64 / GB)
+    } else if bytes_f64 >= MB {
+        format!("{:.1} MB", bytes_f64 / MB)
+    } else if bytes_f64 >= KB {
+        format!("{:.1} KB", bytes_f64 / KB)
     } else {
         format!("{} B", bytes)
     }
