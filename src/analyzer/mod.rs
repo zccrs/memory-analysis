@@ -118,7 +118,6 @@ impl Analyzer {
                 ((p.name.clone(), exe_base_name), p.clone())
             })
             .collect();
-
         let new_by_name_and_exe: HashMap<_, _> = new_processes
             .values()
             .map(|p| {
@@ -127,13 +126,23 @@ impl Analyzer {
             })
             .collect();
 
-        // 查找新增和删除的进程
+        // 查找新增的进程（确保同名进程不会重复计入）
         for ((name, exe_base), process) in &new_by_name_and_exe {
+            // 检查是否在旧进程中存在同名同exe的进程
             let old_exists = old_by_name_and_exe.iter().any(|((old_name, old_exe), _)| {
                 name == old_name && exe_base == old_exe
             });
+
+            // 如果在旧进程中不存在，且不是简单的exe路径变化，则认为是新增进程
             if !old_exists {
-                diff.new_processes.insert(name.clone(), process.clone());
+                // 进一步检查是否只是exe路径变化了
+                let similar_process_exists = old_by_name_and_exe.iter().any(|((old_name, _), _)| {
+                    name == old_name
+                });
+
+                if !similar_process_exists {
+                    diff.new_processes.insert(name.clone(), process.clone());
+                }
             }
         }
 
@@ -219,8 +228,13 @@ impl Analyzer {
             }
         }
 
-        // 记录所有进程的变化情况，包括无变化的进程
-        diff.changed_processes.insert(
+        // 只记录确实发生变化的进程
+        if memory_diff != 0
+            || !library_changes.is_empty()
+            || new_proc.exe_size != old_proc.exe_size
+            || new_proc.open_files_count != old_proc.open_files_count
+            || new_proc.shared_memory != old_proc.shared_memory {
+            diff.changed_processes.insert(
             old_proc.name.clone(),
             ProcessDiff {
                 old_process: old_proc.clone(),
@@ -232,6 +246,7 @@ impl Analyzer {
                 shared_memory_diff: new_proc.shared_memory as i64 - old_proc.shared_memory as i64,
             },
         );
+        }
 
         Ok(())
     }
