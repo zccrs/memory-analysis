@@ -1,4 +1,5 @@
 use crate::collector::{CollectionResult, ProcessInfo, SystemInfo};
+use crate::reporter::Reporter;
 use anyhow::Result;
 use log::{debug, info};
 use std::collections::HashMap;
@@ -114,11 +115,15 @@ impl Analyzer {
     ) -> Result<()> {
         debug!("分析进程变化...");
 
-        // 创建进程映射，使用exe_path或name作为key
+        // 创建进程映射，对于内核进程使用name，普通进程使用exe_path文件名（去掉数字）作为key
         let old_by_key: HashMap<_, _> = old_processes
             .values()
             .map(|p| {
-                let key = p.hash_key_string();
+                let key = if Reporter::is_kernel_process(p) {
+                    p.name.clone()
+                } else {
+                    Self::extract_base_name(&p.exe_path.to_string_lossy())
+                };
                 (key, p.clone())
             })
             .collect();
@@ -126,7 +131,11 @@ impl Analyzer {
         let new_by_key: HashMap<_, _> = new_processes
             .values()
             .map(|p| {
-                let key = p.hash_key_string();
+                let key = if Reporter::is_kernel_process(p) {
+                    p.name.clone()
+                } else {
+                    Self::extract_base_name(&p.exe_path.to_string_lossy())
+                };
                 (key, p.clone())
             })
             .collect();
@@ -141,14 +150,26 @@ impl Analyzer {
                 Self::analyze_process_diff(old_process, new_process, diff)?;
             } else {
                 // 新增进程
-                diff.new_processes.insert(key.clone(), new_process.clone());
+                // 使用进程的原始标识作为map的key
+                let process_key = if Reporter::is_kernel_process(new_process) {
+                    new_process.name.clone()
+                } else {
+                    new_process.exe_path.to_string_lossy().to_string()
+                };
+                diff.new_processes.insert(process_key, new_process.clone());
             }
         }
 
         // 查找已删除的进程
         for (key, old_process) in &old_by_key {
             if !new_by_key.contains_key(key) {
-                diff.removed_processes.insert(key.clone(), old_process.clone());
+                // 使用进程的原始标识作为map的key
+                let process_key = if Reporter::is_kernel_process(old_process) {
+                    old_process.name.clone()
+                } else {
+                    old_process.exe_path.to_string_lossy().to_string()
+                };
+                diff.removed_processes.insert(process_key, old_process.clone());
             }
         }
 
@@ -221,7 +242,11 @@ impl Analyzer {
             || new_proc.exe_size != old_proc.exe_size
             || new_proc.open_files_count != old_proc.open_files_count
             || new_proc.shared_memory != old_proc.shared_memory {
-            let key = new_proc.hash_key_string();
+            let key = if Reporter::is_kernel_process(new_proc) {
+                new_proc.name.clone()
+            } else {
+                new_proc.exe_path.to_string_lossy().to_string()
+            };
             diff.changed_processes.insert(
                 key,
                 ProcessDiff {

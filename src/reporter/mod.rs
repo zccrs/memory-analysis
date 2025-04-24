@@ -17,7 +17,7 @@ pub enum ProcessChangeType {
 pub struct Reporter;
 
 impl Reporter {
-    fn is_kernel_process(process: &ProcessInfo) -> bool {
+    pub fn is_kernel_process(process: &ProcessInfo) -> bool {
         // 内核线程有两种判断方式：
         // 1. /proc/[pid]/status 中的 Kthread:1
         // 2. 可执行文件大小为 0
@@ -694,10 +694,10 @@ impl Reporter {
                 }
                             }
                             (Some(old), None) => {
-                                report.push_str(&format!("  - 移除库 {}\n", old));
+                                report.push_str(&format!("  - 🟢移除库 {}\n", old));
                             }
                             (None, Some(new)) => {
-                                report.push_str(&format!("  - 新增库 {}\n", new));
+                                report.push_str(&format!("  - 🔴新增库 {}\n", new));
                             }
                             _ => {}
                         }
