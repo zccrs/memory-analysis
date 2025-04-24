@@ -551,10 +551,92 @@ impl Reporter {
 
         // 系统进程详细信息
         report.push_str("## 系统进程变化\n\n");
+        // 添加系统进程的内存变化总结
+        let system_total_str = Analyzer::format_bytes(system_total);
+
+        // 统计系统进程的具体变化
+        let mut system_new_count = 0;
+        let mut system_removed_count = 0;
+        let mut system_changed_count = 0;
+        let mut system_new_mem = 0i64;
+        let mut system_removed_mem = 0i64;
+        let mut system_changed_mem = 0i64;
+
+        for &(_, mem, change_type, _) in &system_processes {
+            match change_type {
+                ProcessChangeType::New => {
+                    system_new_count += 1;
+                    system_new_mem += mem;
+                }
+                ProcessChangeType::Removed => {
+                    system_removed_count += 1;
+                    system_removed_mem += mem;
+                }
+                ProcessChangeType::Changed => {
+                    system_changed_count += 1;
+                    system_changed_mem += mem;
+                }
+            }
+        }
+
+        report.push_str(&format!(
+            "系统进程（不含内核进程）的内存变化分析：因新增进程（{}个）增加{}内存占用，因减少进程（{}个）{}了{}内存占用，变化进程（{}个）因为自身内存占用的变化{}了{}内存占用，最终系统进程总体内存{}了{}。这些系统进程主要负责提供系统服务、设备管理、网络通信等基础功能，运行在特权模式下。\n\n",
+            system_new_count,
+            Analyzer::format_bytes(system_new_mem.abs()),
+            system_removed_count,
+            if system_removed_mem > 0 { "增加" } else { "减少" },
+            Analyzer::format_bytes(system_removed_mem.abs()),
+            system_changed_count,
+            if system_changed_mem > 0 { "增加" } else { "减少" },
+            Analyzer::format_bytes(system_changed_mem.abs()),
+            if system_total > 0 { "增加" } else { "减少" },
+            Analyzer::format_bytes(system_total.abs())
+        ));
         Self::write_process_details(&mut report, &system_processes);
 
         // 用户进程详细信息
         report.push_str("## 用户进程变化\n\n");
+        // 添加用户进程的内存变化总结
+        let user_total_str = Analyzer::format_bytes(user_total);
+
+        // 统计用户进程的具体变化
+        let mut user_new_count = 0;
+        let mut user_removed_count = 0;
+        let mut user_changed_count = 0;
+        let mut user_new_mem = 0i64;
+        let mut user_removed_mem = 0i64;
+        let mut user_changed_mem = 0i64;
+
+        for &(_, mem, change_type, _) in &user_processes {
+            match change_type {
+                ProcessChangeType::New => {
+                    user_new_count += 1;
+                    user_new_mem += mem;
+                }
+                ProcessChangeType::Removed => {
+                    user_removed_count += 1;
+                    user_removed_mem += mem;
+                }
+                ProcessChangeType::Changed => {
+                    user_changed_count += 1;
+                    user_changed_mem += mem;
+                }
+            }
+        }
+
+        report.push_str(&format!(
+            "用户进程的内存变化分析：因新增进程（{}个）增加{}内存占用，因减少进程（{}个）{}了{}内存占用，变化进程（{}个）因为自身内存占用的变化{}了{}内存占用，最终用户进程总体内存{}了{}。这些用户进程运行在较低权限的用户空间，主要是用户的日常应用程序、开发工具等。\n\n",
+            user_new_count,
+            Analyzer::format_bytes(user_new_mem.abs()),
+            user_removed_count,
+            if user_removed_mem > 0 { "增加" } else { "减少" },
+            Analyzer::format_bytes(user_removed_mem.abs()),
+            user_changed_count,
+            if user_changed_mem > 0 { "增加" } else { "减少" },
+            Analyzer::format_bytes(user_changed_mem.abs()),
+            if user_total > 0 { "增加" } else { "减少" },
+            Analyzer::format_bytes(user_total.abs())
+        ));
         Self::write_process_details(&mut report, &user_processes);
 
         // 对所有进程进行排序
