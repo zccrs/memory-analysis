@@ -8,6 +8,7 @@ pub struct ProcessInfo {
     pub name: String,
     pub exe_path: PathBuf,
     pub exe_size: u64,
+    pub is_kthread: bool,  // 用于标识内核线程
     pub pss: u64,  // 优先使用 PSS
     pub rss: u64,  // 备选使用 RSS
     pub shared_memory: u64,

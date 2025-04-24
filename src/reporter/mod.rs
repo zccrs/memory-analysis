@@ -11,8 +11,10 @@ pub struct Reporter;
 
 impl Reporter {
     fn is_kernel_process(process: &ProcessInfo) -> bool {
-        // 内核进程的exe_path是空的
-        process.exe_path.as_os_str().is_empty()
+        // 内核线程有两种判断方式：
+        // 1. /proc/[pid]/status 中的 Kthread:1
+        // 2. 可执行文件大小为 0
+        process.is_kthread || process.exe_size == 0
     }
 
     pub fn generate_report(diff: &MemoryDiff, output_dir: &Path, old_identifier: &str, new_identifier: &str) -> Result<(PathBuf, PathBuf, PathBuf)> {
@@ -107,22 +109,34 @@ impl Reporter {
 
         // 旧系统信息
         report.push_str(&format!("## {}\n\n", old_name));
+        // 统计旧系统的进程总数（包括deleted进程和changed进程中的old进程）
         let old_total = diff.removed_processes.len() + diff.changed_processes.len();
-        let old_kernel_count = diff.removed_processes.values()
-            .chain(diff.changed_processes.values().map(|p| &p.old_process))
+
+        // 创建一个包含所有旧进程的迭代器
+        let old_processes = diff.removed_processes.values()
+            .map(|p| p as &ProcessInfo)
+            .chain(diff.changed_processes.values().map(|p| &p.old_process));
+
+        // 统计内核进程数量
+        let old_kernel_count = old_processes
+            .clone()
             .filter(|p| Self::is_kernel_process(p))
             .count();
-        let old_system_count = diff.removed_processes.values()
-            .chain(diff.changed_processes.values().map(|p| &p.old_process))
+        info!("{}内核进程数量：{}", old_identifier, old_kernel_count);
+
+        // 统计系统进程数量（非用户进程）
+        let old_system_count = old_processes
+            .clone()
             .filter(|p| !Self::is_kernel_process(p) && p.user_id != diff.current_user_id)
             .count();
-        let old_user_count = diff.removed_processes.values()
-            .chain(diff.changed_processes.values().map(|p| &p.old_process))
+
+        // 统计用户进程数量
+        let old_user_count = old_processes
             .filter(|p| !Self::is_kernel_process(p) && p.user_id == diff.current_user_id)
             .count();
 
         report.push_str(&format!("- 总进程数：{}\n", old_total));
-        report.push_str(&format!("  - 内核进程：{} (无exe_path)\n", old_kernel_count));
+        report.push_str(&format!("  - 内核进程：{}\n", old_kernel_count));
         report.push_str(&format!("  - 系统进程：{} (非用户进程)\n", old_system_count));
         report.push_str(&format!("  - 用户进程：{}\n\n", old_user_count));
 
@@ -143,57 +157,53 @@ impl Reporter {
             .count();
 
         report.push_str(&format!("- 总进程数：{}\n", new_total));
-        report.push_str(&format!("  - 内核进程：{} (无exe_path)\n", new_kernel_count));
+        report.push_str(&format!("  - 内核进程：{}\n", new_kernel_count));
         report.push_str(&format!("  - 系统进程：{} (非用户进程)\n", new_system_count));
         report.push_str(&format!("  - 用户进程：{}\n\n", new_user_count));
 
-        // 计算各类进程的内存变化
-        let mut kernel_new = 0i64;      // 内核线程
-        let mut kernel_removed = 0i64;
-        let mut kernel_changed = 0i64;
-        let mut system_new = 0i64;      // 系统进程（非用户进程）
-        let mut system_removed = 0i64;
-        let mut system_changed = 0i64;
-        let mut user_new = 0i64;       // 当前用户的进程
-        let mut user_removed = 0i64;
-        let mut user_changed = 0i64;
+        // 计算各类进程的内存使用情况
+        let mut kernel_total = 0i64;      // 内核线程
+        let mut system_total = 0i64;      // 系统进程（非用户进程）
+        let mut user_total = 0i64;       // 当前用户的进程
         let mut total_libs = 0i64;
         let mut total_exe = 0i64;
         let mut total_files = 0i64;
         let mut total_shared = 0i64;
 
-        // 统计新增进程
+        // 统计所有进程的内存使用（包括新增、删除和变化的进程）
+        // 新增进程
         for process in diff.new_processes.values() {
             let mem = if process.pss > 0 { process.pss as i64 } else { process.rss as i64 };
             if Self::is_kernel_process(process) {
-                kernel_new += mem;
+                kernel_total += mem;
             } else if process.user_id == diff.current_user_id {
-                user_new += mem;
+                user_total += mem;
             } else {
-                system_new += mem;
+                system_total += mem;
             }
         }
 
-        // 统计已删除进程
+        // 移除进程
         for process in diff.removed_processes.values() {
             let mem = if process.pss > 0 { process.pss as i64 } else { process.rss as i64 };
             if Self::is_kernel_process(process) {
-                kernel_removed -= mem;
+                kernel_total -= mem;
             } else if process.user_id == diff.current_user_id {
-                user_removed -= mem;
+                user_total -= mem;
             } else {
-                system_removed -= mem;
+                system_total -= mem;
             }
         }
 
-        // 统计变化的进程
+        // 变化的进程
         for proc_diff in diff.changed_processes.values() {
+            let mem_diff = proc_diff.memory_diff;
             if Self::is_kernel_process(&proc_diff.new_process) {
-                kernel_changed += proc_diff.memory_diff;
+                kernel_total += mem_diff;
             } else if proc_diff.new_process.user_id == diff.current_user_id {
-                user_changed += proc_diff.memory_diff;
+                user_total += mem_diff;
             } else {
-                system_changed += proc_diff.memory_diff;
+                system_total += mem_diff;
             }
             total_libs += proc_diff.library_changes.iter().map(|l| l.size_diff).sum::<i64>();
             total_exe += proc_diff.exe_size_diff;
@@ -201,63 +211,70 @@ impl Reporter {
             total_shared += proc_diff.shared_memory_diff;
         }
 
-        // 计算各类总变化
-        let kernel_total = kernel_new + kernel_removed + kernel_changed;
-        let system_total = system_new + system_removed + system_changed;
-        let user_total = user_new + user_removed + user_changed;
-
         // 内存变化总览
         report.push_str("## 内存变化总览\n\n");
         report.push_str("```diff\n");
 
         // 内核部分
         report.push_str("# 内核内存变化\n");
-        if kernel_new > 0 {
-            report.push_str(&format!("+ 新增内核进程：{}\n", Analyzer::format_bytes(kernel_new)));
+        let kernel_change_str = Analyzer::format_bytes(kernel_total);
+        if kernel_total > 0 {
+            report.push_str(&format!("+ 内核进程内存变化：{}\n", kernel_change_str));
+        } else if kernel_total < 0 {
+            report.push_str(&format!("- 内核进程内存变化：{}\n", kernel_change_str));
+        } else {
+            report.push_str(&format!("  内核进程内存变化：{}\n", kernel_change_str));
         }
-        if kernel_removed < 0 {
-            report.push_str(&format!("- 移除内核进程：{}\n", Analyzer::format_bytes(kernel_removed)));
-        }
-        if kernel_changed != 0 {
-            report.push_str(&format!("@ 内核进程变化：{}\n", Analyzer::format_bytes(kernel_changed)));
-        }
-        report.push_str(&format!("  内核总变化：  {}\n", Analyzer::format_bytes(kernel_total)));
 
         // 系统部分
         report.push_str("\n# 系统内存变化\n");
-        if system_new > 0 {
-            report.push_str(&format!("+ 新增系统进程：{}\n", Analyzer::format_bytes(system_new)));
+        let system_change_str = Analyzer::format_bytes(system_total);
+        if system_total > 0 {
+            report.push_str(&format!("+ 系统进程内存变化：{}\n", system_change_str));
+        } else if system_total < 0 {
+            report.push_str(&format!("- 系统进程内存变化：{}\n", system_change_str));
+        } else {
+            report.push_str(&format!("  系统进程内存变化：{}\n", system_change_str));
         }
-        if system_removed < 0 {
-            report.push_str(&format!("- 移除系统进程：{}\n", Analyzer::format_bytes(system_removed)));
-        }
-        if system_changed != 0 {
-            report.push_str(&format!("@ 系统进程变化：{}\n", Analyzer::format_bytes(system_changed)));
-        }
-        report.push_str(&format!("  系统总变化：  {}\n", Analyzer::format_bytes(system_total)));
 
         // 用户部分
         report.push_str("\n# 用户内存变化\n");
-        if user_new > 0 {
-            report.push_str(&format!("+ 新增用户进程：{}\n", Analyzer::format_bytes(user_new)));
+        let user_change_str = Analyzer::format_bytes(user_total);
+        if user_total > 0 {
+            report.push_str(&format!("+ 用户进程内存变化：{}\n", user_change_str));
+        } else if user_total < 0 {
+            report.push_str(&format!("- 用户进程内存变化：{}\n", user_change_str));
+        } else {
+            report.push_str(&format!("  用户进程内存变化：{}\n", user_change_str));
         }
-        if user_removed < 0 {
-            report.push_str(&format!("- 移除用户进程：{}\n", Analyzer::format_bytes(user_removed)));
-        }
-        if user_changed != 0 {
-            report.push_str(&format!("@ 用户进程变化：{}\n", Analyzer::format_bytes(user_changed)));
-        }
-        report.push_str(&format!("  用户总变化：  {}\n", Analyzer::format_bytes(user_total)));
 
         // 总计
         report.push_str("\n-------------------\n");
         report.push_str(&format!("  总内存变化：  {}\n", Analyzer::format_bytes(diff.total_diff)));
         report.push_str("```\n\n");
+
+        // 统计总的变化量
+        let mut total_new = 0i64;
+        let mut total_removed = 0i64;
+        let mut total_changed = 0i64;
+
+        // 计算新增进程的总内存
+        for process in diff.new_processes.values() {
+            total_new += if process.pss > 0 { process.pss as i64 } else { process.rss as i64 };
+        }
+
+        // 计算移除进程的总内存
+        for process in diff.removed_processes.values() {
+            total_removed -= if process.pss > 0 { process.pss as i64 } else { process.rss as i64 };
+        }
+
+        // 计算变化进程的总内存差异
+        for proc_diff in diff.changed_processes.values() {
+            total_changed += proc_diff.memory_diff;
+        }
+
         // 计算总变化
-        let total_new = kernel_new + system_new + user_new;
-        let total_removed = kernel_removed + system_removed + user_removed;
-        let total_changed = kernel_changed + system_changed + user_changed;
-        let process_memory_change = total_new + total_removed + total_changed;
+        let process_memory_change = kernel_total + system_total + user_total;
         let libs_and_exe_change = total_libs + total_exe;
         let other_change = total_files + total_shared;
         let kernel_change = diff.total_diff - process_memory_change - libs_and_exe_change - other_change;

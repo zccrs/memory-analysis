@@ -13,7 +13,6 @@ pub struct MemoryDiff {
     pub changed_processes: HashMap<String, ProcessDiff>,
     pub system_changes: SystemDiff,
     pub current_user_id: u32,
-    pub sys_processes_count: usize,  // 系统进程数量
     pub old_os_release: String,  // 旧系统版本名称
     pub new_os_release: String,  // 新系统版本名称
 }
@@ -86,9 +85,6 @@ impl Analyzer {
                 new_initramfs_size: Some(host2_data.system_info.initrd_file_size as i64),
             },
             current_user_id: unsafe { libc::geteuid() },
-            sys_processes_count: host2_data.processes.values()
-                .filter(|p| p.exe_path.as_os_str().is_empty() || p.user_id == 0)
-                .count(),
             old_os_release: host1_data.system_info.os_release,
             new_os_release: host2_data.system_info.os_release,
         };

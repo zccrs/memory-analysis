@@ -415,6 +415,13 @@ impl Collector {
             .and_then(|uid| uid.parse::<u32>().ok())
             .unwrap_or_else(|| unsafe { libc::geteuid() });
 
+        // 判断是否为内核线程
+        let is_kthread = status.lines()
+            .find(|line| line.starts_with("Kthread:"))
+            .and_then(|line| line.split_whitespace().nth(1))
+            .map(|val| val == "1")
+            .unwrap_or(false);
+
         // 获取可执行文件路径
         let (exe_path_str, _) = executor.execute_sudo_command(
             &format!("readlink -f /proc/{}/exe 2>/dev/null", pid)
@@ -478,6 +485,7 @@ impl Collector {
             name,
             exe_path,
             exe_size,
+            is_kthread,
             pss,
             rss,
             shared_memory,
