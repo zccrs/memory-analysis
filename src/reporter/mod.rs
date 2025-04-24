@@ -1,4 +1,5 @@
 use crate::analyzer::{Analyzer, MemoryDiff};
+use crate::collector::ProcessInfo;
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 use std::fs;
@@ -39,7 +40,17 @@ impl Reporter {
         // 添加报告标题
         report.push_str("# 内存使用差异分析报告\n\n");
 
-        // 添加内存统计方式说明
+        // 添加名词解释
+        report.push_str("## 名词解释\n\n");
+        report.push_str("* **PSS (Proportional Set Size)**: 按比例分配的物理内存大小，将共享内存按使用比例分配给各个进程\n");
+        report.push_str("* **RSS (Resident Set Size)**: 进程实际使用的物理内存大小，包含共享内存\n");
+        report.push_str("* **新增进程**: 在新系统中出现，但在旧系统中不存在的进程\n");
+        report.push_str("* **移除进程**: 在旧系统中存在，但在新系统中不存在的进程\n");
+        report.push_str("* **内存占用变化**: \n");
+        report.push_str("  * 🔴 红色表示内存增加或新增项目\n");
+        report.push_str("  * 🟢 绿色表示内存减少或移除项目\n\n");
+
+        // 添加统计方式说明
         report.push_str("## 关于内存统计方式\n\n");
         report.push_str("本工具使用以下方式统计内存：\n\n");
         report.push_str("1. **进程内存计算方式**\n");
@@ -70,10 +81,61 @@ impl Reporter {
 
         report.push_str(&format!("本报告对比了 {} 和 {} 的内存使用情况。\n\n", old_identifier, new_identifier));
 
-        // 计算各种变化的内存占比
-        let mut total_new = 0i64;
-        let mut total_removed = 0i64;
-        let mut total_changed = 0i64;
+        // 统计新旧系统的基本信息
+        report.push_str("# 综述\n\n");
+
+        // 旧系统信息
+        report.push_str("## 旧系统\n\n");
+        let old_total = diff.removed_processes.len() + diff.changed_processes.len();
+        let old_kernel_count = diff.removed_processes.values()
+            .chain(diff.changed_processes.values().map(|p| &p.old_process))
+            .filter(|p| p.exe_path.to_string_lossy().contains("kernel"))
+            .count();
+        let old_system_count = diff.removed_processes.values()
+            .chain(diff.changed_processes.values().map(|p| &p.old_process))
+            .filter(|p| !p.exe_path.to_string_lossy().contains("kernel") && p.user_id != diff.current_user_id)
+            .count();
+        let old_user_count = diff.removed_processes.values()
+            .chain(diff.changed_processes.values().map(|p| &p.old_process))
+            .filter(|p| p.user_id == diff.current_user_id)
+            .count();
+
+        report.push_str(&format!("- 总进程数：{}\n", old_total));
+        report.push_str(&format!("  - 内核进程：{}\n", old_kernel_count));
+        report.push_str(&format!("  - 系统进程：{}\n", old_system_count));
+        report.push_str(&format!("  - 用户进程：{}\n\n", old_user_count));
+
+        // 新系统信息
+        report.push_str("## 新系统\n\n");
+        let new_total = diff.new_processes.len() + diff.changed_processes.len();
+        let new_kernel_count = diff.new_processes.values()
+            .chain(diff.changed_processes.values().map(|p| &p.new_process))
+            .filter(|p| p.exe_path.to_string_lossy().contains("kernel"))
+            .count();
+        let new_system_count = diff.new_processes.values()
+            .chain(diff.changed_processes.values().map(|p| &p.new_process))
+            .filter(|p| !p.exe_path.to_string_lossy().contains("kernel") && p.user_id != diff.current_user_id)
+            .count();
+        let new_user_count = diff.new_processes.values()
+            .chain(diff.changed_processes.values().map(|p| &p.new_process))
+            .filter(|p| p.user_id == diff.current_user_id)
+            .count();
+
+        report.push_str(&format!("- 总进程数：{}\n", new_total));
+        report.push_str(&format!("  - 内核进程：{}\n", new_kernel_count));
+        report.push_str(&format!("  - 系统进程：{}\n", new_system_count));
+        report.push_str(&format!("  - 用户进程：{}\n\n", new_user_count));
+
+        // 计算各类进程的内存变化
+        let mut kernel_new = 0i64;
+        let mut kernel_removed = 0i64;
+        let mut kernel_changed = 0i64;
+        let mut system_new = 0i64;
+        let mut system_removed = 0i64;
+        let mut system_changed = 0i64;
+        let mut user_new = 0i64;
+        let mut user_removed = 0i64;
+        let mut user_changed = 0i64;
         let mut total_libs = 0i64;
         let mut total_exe = 0i64;
         let mut total_files = 0i64;
@@ -81,52 +143,104 @@ impl Reporter {
 
         // 统计新增进程
         for process in diff.new_processes.values() {
-            total_new += if process.pss > 0 {
-                process.pss as i64
+            let mem = if process.pss > 0 { process.pss as i64 } else { process.rss as i64 };
+            if process.exe_path.to_string_lossy().contains("kernel") {
+                kernel_new += mem;
+            } else if process.user_id == diff.current_user_id {
+                user_new += mem;
             } else {
-                process.rss as i64
-            };
+                system_new += mem;
+            }
         }
 
         // 统计已删除进程
         for process in diff.removed_processes.values() {
-            total_removed -= if process.pss > 0 {
-                process.pss as i64
+            let mem = if process.pss > 0 { process.pss as i64 } else { process.rss as i64 };
+            if process.exe_path.to_string_lossy().contains("kernel") {
+                kernel_removed -= mem;
+            } else if process.user_id == diff.current_user_id {
+                user_removed -= mem;
             } else {
-                process.rss as i64
-            };
+                system_removed -= mem;
+            }
         }
 
         // 统计变化的进程
         for proc_diff in diff.changed_processes.values() {
-            total_changed += proc_diff.memory_diff;
-            total_libs += proc_diff.library_changes.iter()
-                .map(|l| l.size_diff)
-                .sum::<i64>();
+            if proc_diff.new_process.exe_path.to_string_lossy().contains("kernel") {
+                kernel_changed += proc_diff.memory_diff;
+            } else if proc_diff.new_process.user_id == diff.current_user_id {
+                user_changed += proc_diff.memory_diff;
+            } else {
+                system_changed += proc_diff.memory_diff;
+            }
+            total_libs += proc_diff.library_changes.iter().map(|l| l.size_diff).sum::<i64>();
             total_exe += proc_diff.exe_size_diff;
             total_files += proc_diff.open_files_diff as i64 * 4096; // 估算每个文件句柄 4KB
             total_shared += proc_diff.shared_memory_diff;
         }
 
-        // 总体内存差异
-        report.push_str("## 总体内存差异\n\n");
+        // 计算各类总变化
+        let kernel_total = kernel_new + kernel_removed + kernel_changed;
+        let system_total = system_new + system_removed + system_changed;
+        let user_total = user_new + user_removed + user_changed;
 
-        // 计算实际内存变化的组成
+        // 内存变化总览
+        report.push_str("## 内存变化总览\n\n");
+        report.push_str("```diff\n");
+
+        // 内核部分
+        report.push_str("# 内核内存变化\n");
+        if kernel_new > 0 {
+            report.push_str(&format!("+ 新增内核进程：{}\n", Analyzer::format_bytes(kernel_new)));
+        }
+        if kernel_removed < 0 {
+            report.push_str(&format!("- 移除内核进程：{}\n", Analyzer::format_bytes(kernel_removed)));
+        }
+        if kernel_changed != 0 {
+            report.push_str(&format!("@ 内核进程变化：{}\n", Analyzer::format_bytes(kernel_changed)));
+        }
+        report.push_str(&format!("  内核总变化：  {}\n", Analyzer::format_bytes(kernel_total)));
+
+        // 系统部分
+        report.push_str("\n# 系统内存变化\n");
+        if system_new > 0 {
+            report.push_str(&format!("+ 新增系统进程：{}\n", Analyzer::format_bytes(system_new)));
+        }
+        if system_removed < 0 {
+            report.push_str(&format!("- 移除系统进程：{}\n", Analyzer::format_bytes(system_removed)));
+        }
+        if system_changed != 0 {
+            report.push_str(&format!("@ 系统进程变化：{}\n", Analyzer::format_bytes(system_changed)));
+        }
+        report.push_str(&format!("  系统总变化：  {}\n", Analyzer::format_bytes(system_total)));
+
+        // 用户部分
+        report.push_str("\n# 用户内存变化\n");
+        if user_new > 0 {
+            report.push_str(&format!("+ 新增用户进程：{}\n", Analyzer::format_bytes(user_new)));
+        }
+        if user_removed < 0 {
+            report.push_str(&format!("- 移除用户进程：{}\n", Analyzer::format_bytes(user_removed)));
+        }
+        if user_changed != 0 {
+            report.push_str(&format!("@ 用户进程变化：{}\n", Analyzer::format_bytes(user_changed)));
+        }
+        report.push_str(&format!("  用户总变化：  {}\n", Analyzer::format_bytes(user_total)));
+
+        // 总计
+        report.push_str("\n-------------------\n");
+        report.push_str(&format!("  总内存变化：  {}\n", Analyzer::format_bytes(diff.total_diff)));
+        report.push_str("```\n\n");
+        // 计算总变化
+        let total_new = kernel_new + system_new + user_new;
+        let total_removed = kernel_removed + system_removed + user_removed;
+        let total_changed = kernel_changed + system_changed + user_changed;
         let process_memory_change = total_new + total_removed + total_changed;
         let libs_and_exe_change = total_libs + total_exe;
         let other_change = total_files + total_shared;
         let kernel_change = diff.total_diff - process_memory_change - libs_and_exe_change - other_change;
 
-        report.push_str("```diff\n");
-        report.push_str(&format!("+ 新增进程内存：{}\n", Analyzer::format_bytes(total_new)));
-        report.push_str(&format!("- 移除进程内存：{}\n", Analyzer::format_bytes(total_removed)));
-        report.push_str(&format!("@ 现有进程变化：{}\n", Analyzer::format_bytes(total_changed)));
-        report.push_str(&format!("  动态库变化：   {}\n", Analyzer::format_bytes(total_libs)));
-        report.push_str(&format!("  其他资源变化： {}\n", Analyzer::format_bytes(other_change)));
-        report.push_str(&format!("  内核空间变化： {}\n", Analyzer::format_bytes(kernel_change)));
-        report.push_str("-------------------\n");
-        report.push_str(&format!("  总内存变化：   {}\n", Analyzer::format_bytes(diff.total_diff)));
-        report.push_str("```\n\n");
         report.push_str("**内存变化详细分析**\n\n");
         report.push_str("1. **进程内存变化**\n");
         report.push_str(&format!("   - 新增进程：{}\n", Analyzer::format_bytes(total_new)));
@@ -194,10 +308,119 @@ impl Reporter {
         }
         report.push('\n');
 
-        // 按内存变化大小排序的进程详情
-        let mut sorted_processes = Vec::new();
+        // 分类详细信息
+        report.push_str("# 详细内存分析\n\n");
 
-        // 收集所有进程信息并计算内存变化
+        // 内核部分详细信息
+        report.push_str("## 内核内存变化\n\n");
+
+        // 内核文件变化
+        report.push_str("### 内核文件变化\n\n");
+        report.push_str("| 文件 | 原大小 | 新大小 | 变化 |\n");
+        report.push_str("|------|---------|---------|-------|\n");
+        if let Some(old_vmlinuz) = diff.system_changes.old_kernel_size {
+            if let Some(new_vmlinuz) = diff.system_changes.new_kernel_size {
+                let change = new_vmlinuz - old_vmlinuz;
+                let change_color = if change > 0 { "🔴" } else { "🟢" };
+                report.push_str(&format!("| vmlinuz | {} | {} | {} {} |\n",
+                    Analyzer::format_bytes(old_vmlinuz),
+                    Analyzer::format_bytes(new_vmlinuz),
+                    change_color,
+                    Analyzer::format_bytes(change)));
+            }
+        }
+        if let Some(old_initramfs) = diff.system_changes.old_initramfs_size {
+            if let Some(new_initramfs) = diff.system_changes.new_initramfs_size {
+                let change = new_initramfs - old_initramfs;
+                let change_color = if change > 0 { "🔴" } else { "🟢" };
+                report.push_str(&format!("| initramfs | {} | {} | {} {} |\n",
+                    Analyzer::format_bytes(old_initramfs),
+                    Analyzer::format_bytes(new_initramfs),
+                    change_color,
+                    Analyzer::format_bytes(change)));
+            }
+        }
+        report.push_str("\n");
+
+        // 内核线程变化
+        report.push_str("### 内核线程变化\n\n");
+        let kernel_processes: Vec<_> = diff.new_processes.iter()
+            .filter(|(_, p)| p.exe_path.to_string_lossy().contains("kernel"))
+            .collect();
+        let removed_kernel_processes: Vec<_> = diff.removed_processes.iter()
+            .filter(|(_, p)| p.exe_path.to_string_lossy().contains("kernel"))
+            .collect();
+
+        if !kernel_processes.is_empty() {
+            report.push_str("#### 新增内核线程\n\n");
+            for (name, _process) in kernel_processes {
+                report.push_str(&format!("🔴 {}\n", name));
+            }
+            report.push_str("\n");
+        }
+
+        if !removed_kernel_processes.is_empty() {
+            report.push_str("#### 移除内核线程\n\n");
+            for (name, _process) in removed_kernel_processes {
+                report.push_str(&format!("🟢 {}\n", name));
+            }
+            report.push_str("\n");
+        }
+
+        // 对进程按类别分类
+        let mut kernel_processes = Vec::new();
+        let mut system_processes = Vec::new();
+        let mut user_processes = Vec::new();
+
+        // 收集所有进程信息并分类
+        for (name, process) in &diff.new_processes {
+            let mem = if process.pss > 0 { process.pss } else { process.rss } as i64;
+            let entry = (name, mem, true, process);
+            if process.exe_path.to_string_lossy().contains("kernel") {
+                kernel_processes.push(entry);
+            } else if process.user_id == diff.current_user_id {
+                user_processes.push(entry);
+            } else {
+                system_processes.push(entry);
+            }
+        }
+        for (name, process) in &diff.removed_processes {
+            let mem = if process.pss > 0 { process.pss } else { process.rss } as i64;
+            let entry = (name, -mem, false, process);
+            if process.exe_path.to_string_lossy().contains("kernel") {
+                kernel_processes.push(entry);
+            } else if process.user_id == diff.current_user_id {
+                user_processes.push(entry);
+            } else {
+                system_processes.push(entry);
+            }
+        }
+        for (name, proc_diff) in &diff.changed_processes {
+            let entry = (name, proc_diff.memory_diff, true, &proc_diff.new_process);
+            if proc_diff.new_process.exe_path.to_string_lossy().contains("kernel") {
+                kernel_processes.push(entry);
+            } else if proc_diff.new_process.user_id == diff.current_user_id {
+                user_processes.push(entry);
+            } else {
+                system_processes.push(entry);
+            }
+        }
+
+        // 对每个类别内的进程按内存变化大小排序
+        kernel_processes.sort_by_key(|(_, mem, _, _)| -mem.abs());
+        system_processes.sort_by_key(|(_, mem, _, _)| -mem.abs());
+        user_processes.sort_by_key(|(_, mem, _, _)| -mem.abs());
+
+        // 系统进程详细信息
+        report.push_str("## 系统进程变化\n\n");
+        Self::write_process_details(&mut report, &system_processes);
+
+        // 用户进程详细信息
+        report.push_str("## 用户进程变化\n\n");
+        Self::write_process_details(&mut report, &user_processes);
+
+        // 对所有进程进行排序
+        let mut sorted_processes = Vec::new();
         for (name, process) in &diff.new_processes {
             let mem = if process.pss > 0 { process.pss } else { process.rss } as i64;
             sorted_processes.push((name, mem, true, process));
@@ -213,20 +436,7 @@ impl Reporter {
         // 按内存变化大小排序（绝对值降序）
         sorted_processes.sort_by_key(|(_, mem, _, _)| -mem.abs());
 
-        // 打印详细信息
-        report.push_str("### 进程内存变化详情（按变化量排序）\n\n");
-        for (name, mem_change, is_current, process) in sorted_processes {
-            report.push_str(&format!("#### {} ({:+})\n", name, Analyzer::format_bytes(mem_change)));
-            if is_current {
-                report.push_str(&format!("- 当前可执行文件路径：{}\n", process.exe_path.display()));
-                report.push_str(&format!("- 打开文件数：{}\n", process.open_files_count));
-                report.push_str(&format!("- 加载动态库：{} 个\n", process.libraries.len()));
-            } else {
-                report.push_str("- 进程已终止\n");
-                report.push_str(&format!("- 原可执行文件路径：{}\n", process.exe_path.display()));
-            }
-            report.push_str("\n");
-        }
+        // 输出所有进程变化信息
 
         // 变化的进程的详细信息
         if !diff.changed_processes.is_empty() {
@@ -278,6 +488,54 @@ impl Reporter {
         }
 
         Ok(report)
+    }
+
+    fn write_process_details(report: &mut String, processes: &[(&String, i64, bool, &ProcessInfo)]) {
+        // 新增进程
+        let new_processes: Vec<_> = processes.iter()
+            .filter(|(_, mem, is_current, _)| *is_current && *mem > 0)
+            .collect();
+        if !new_processes.is_empty() {
+            report.push_str("### 新增进程\n\n");
+            for (name, mem, _, process) in new_processes {
+                report.push_str(&format!("#### {} (🔴 +{})\n", name, Analyzer::format_bytes(*mem)));
+                report.push_str(&format!("- 可执行文件路径：{}\n", process.exe_path.display()));
+                report.push_str(&format!("- 打开文件数：{}\n", process.open_files_count));
+                report.push_str(&format!("- 加载动态库：{} 个\n", process.libraries.len()));
+                report.push_str("\n");
+            }
+        }
+
+        // 移除进程
+        let removed_processes: Vec<_> = processes.iter()
+            .filter(|(_, _mem, is_current, _)| !*is_current)
+            .collect();
+        if !removed_processes.is_empty() {
+            report.push_str("### 移除进程\n\n");
+            for (name, mem, _, process) in removed_processes {
+                report.push_str(&format!("#### {} (🟢 {})\n", name, Analyzer::format_bytes(*mem)));
+                report.push_str(&format!("- 可执行文件路径：{}\n", process.exe_path.display()));
+                report.push_str(&format!("- 打开文件数：{}\n", process.open_files_count));
+                report.push_str(&format!("- 加载动态库：{} 个\n", process.libraries.len()));
+                report.push_str("\n");
+            }
+        }
+
+        // 变化进程
+        let changed_processes: Vec<_> = processes.iter()
+            .filter(|(_, mem, is_current, _)| *is_current && *mem < 0)
+            .collect();
+        if !changed_processes.is_empty() {
+            report.push_str("### 变化进程\n\n");
+            for (name, mem, _, process) in changed_processes {
+                let change_color = if *mem > 0 { "🔴" } else { "🟢" };
+                report.push_str(&format!("#### {} ({} {})\n", name, change_color, Analyzer::format_bytes(*mem)));
+                report.push_str(&format!("- 可执行文件路径：{}\n", process.exe_path.display()));
+                report.push_str(&format!("- 打开文件数：{}\n", process.open_files_count));
+                report.push_str(&format!("- 加载动态库：{} 个\n", process.libraries.len()));
+                report.push_str("\n");
+            }
+        }
     }
 
     fn bytes_to_mb(bytes: i64) -> String {

@@ -19,3 +19,4 @@ byte-unit = "4.0"  # 添加 Byte Unit 依赖
 nix = { version = "0.26", features = ["fs"] }  # 添加 nix 依赖用于文件权限操作
 regex = "1.5"  # 添加 regex 依赖用于字符串匹配
 lazy_static = "1.4"  # 添加 lazy_static 依赖用于静态正则表达式
+libc = "0.2"  # 添加 libc 依赖用于获取系统用户信息

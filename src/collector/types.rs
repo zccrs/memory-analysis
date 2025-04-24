@@ -13,6 +13,7 @@ pub struct ProcessInfo {
     pub shared_memory: u64,
     pub open_files_count: usize,
     pub libraries: Vec<LibraryInfo>,
+    pub user_id: u32,  // 进程所属用户的ID
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

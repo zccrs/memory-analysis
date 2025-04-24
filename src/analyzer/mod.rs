@@ -12,6 +12,7 @@ pub struct MemoryDiff {
     pub removed_processes: HashMap<String, ProcessInfo>,
     pub changed_processes: HashMap<String, ProcessDiff>,
     pub system_changes: SystemDiff,
+    pub current_user_id: u32,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -37,6 +38,10 @@ pub struct SystemDiff {
     pub pagesize_diff: i64,
     pub kernel_version_changed: bool,
     pub shared_memory_diff: i64,
+    pub old_kernel_size: Option<i64>,
+    pub new_kernel_size: Option<i64>,
+    pub old_initramfs_size: Option<i64>,
+    pub new_initramfs_size: Option<i64>,
 }
 
 pub struct Analyzer;
@@ -72,7 +77,12 @@ impl Analyzer {
                 kernel_version_changed: host1_data.system_info.kernel_version != host2_data.system_info.kernel_version,
                 shared_memory_diff: host2_data.system_info.total_shared_memory as i64
                     - host1_data.system_info.total_shared_memory as i64,
+                old_kernel_size: Some(host1_data.system_info.kernel_file_size as i64),
+                new_kernel_size: Some(host2_data.system_info.kernel_file_size as i64),
+                old_initramfs_size: Some(host1_data.system_info.initrd_file_size as i64),
+                new_initramfs_size: Some(host2_data.system_info.initrd_file_size as i64),
             },
+            current_user_id: unsafe { libc::geteuid() },
         };
 
         // 分析进程变化

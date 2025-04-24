@@ -237,47 +237,29 @@ impl Collector {
 
         // 并行处理进程
         let processed_processes: HashMap<i32, ProcessInfo> = processes_to_collect.par_iter()
-            .filter_map(|(pid, name)| {
-                // 只跳过内核工作线程
-                if name.starts_with("kworker") {
-                    {
-                        let mut count = skipped_count.lock().unwrap();
-                        *count += 1;
-                        let mut current = progress.lock().unwrap();
+            .filter_map(|(pid, _name)| {
+                let executor_clone = executor.clone();
+                let progress_clone = progress.clone();
+                match self.collect_process_info_parallel(*pid, executor_clone) {
+                    Ok(info) => {
+                        let mut current = progress_clone.lock().unwrap();
                         *current += 1;
                         if *current % 10 == 0 || *current == total_count {
                             print!("\r进度: {}/{}  ({:.1}%)    ", *current, total_count, (*current as f64 / total_count as f64) * 100.0);
                             std::io::stdout().flush().unwrap();
                         }
-                        debug!("跳过系统进程: {} (PID: {})", name, pid);
+                        debug!("成功收集进程信息 PID: {}", pid);
+                        Some((*pid, info))
                     }
-                    None
-                } else {
-                    let executor_clone = executor.clone();
-                    let progress_clone = progress.clone();
-                    match self.collect_process_info_parallel(*pid, executor_clone) {
-                        Ok(info) => {
-                            let mut current = progress_clone.lock().unwrap();
-                            *current += 1;
-                            if *current % 10 == 0 || *current == total_count {
-                                print!("\r进度: {}/{}  ({:.1}%)    ", *current, total_count, (*current as f64 / total_count as f64) * 100.0);
-                                std::io::stdout().flush().unwrap();
-                            }
-                            debug!("成功收集进程信息 PID: {}", pid);
-                            Some((*pid, info))
+                    Err(e) => {
+                        let mut current = progress_clone.lock().unwrap();
+                        *current += 1;
+                        if *current % 10 == 0 || *current == total_count {
+                            print!("\r进度: {}/{}  ({:.1}%)    ", *current, total_count, (*current as f64 / total_count as f64) * 100.0);
+                            std::io::stdout().flush().unwrap();
                         }
-                        Err(e) => {
-                            {
-                                let mut current = progress_clone.lock().unwrap();
-                                *current += 1;
-                                if *current % 10 == 0 || *current == total_count {
-                                    print!("\r进度: {}/{}  ({:.1}%)    ", *current, total_count, (*current as f64 / total_count as f64) * 100.0);
-                                    std::io::stdout().flush().unwrap();
-                                }
-                            }
-                            debug!("收集进程 {} 信息失败: {}", pid, e);
-                            None
-                        }
+                        debug!("收集进程 {} 信息失败: {}", pid, e);
+                        None
                     }
                 }
             })
@@ -294,7 +276,7 @@ impl Collector {
         let mut executor_guard = executor.lock().unwrap();
         let executor = &mut *executor_guard;
 
-        // 获取进程基本信息
+        // 获取进程基本信息和用户ID
         let (status, _) = executor.execute_sudo_command(
             &format!("cat /proc/{}/status 2>/dev/null", pid)
         )?;
@@ -304,6 +286,13 @@ impl Collector {
             .map(|line| line.split_whitespace().nth(1).unwrap_or("unknown"))
             .unwrap_or("unknown")
             .to_string();
+
+        // 从status中获取用户ID
+        let user_id = status.lines()
+            .find(|line| line.starts_with("Uid:"))
+            .and_then(|line| line.split_whitespace().nth(1))  // 获取real uid
+            .and_then(|uid| uid.parse::<u32>().ok())
+            .unwrap_or_else(|| unsafe { libc::geteuid() });
 
         // 获取可执行文件路径
         let (exe_path_str, _) = executor.execute_sudo_command(
@@ -373,6 +362,7 @@ impl Collector {
             shared_memory,
             open_files_count,
             libraries,
+            user_id,
         })
     }
 
