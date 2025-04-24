@@ -1,6 +1,6 @@
 use crate::collector::{CollectionResult, ProcessInfo, SystemInfo};
 use anyhow::Result;
-use log::{debug, info, warn};
+use log::{debug, info};
 use std::collections::HashMap;
 use byte_unit::Byte;
 use regex::Regex;
@@ -118,7 +118,7 @@ impl Analyzer {
         let old_by_key: HashMap<_, _> = old_processes
             .values()
             .map(|p| {
-                let key = p.hash_key();
+                let key = p.hash_key_string();
                 (key, p.clone())
             })
             .collect();
@@ -126,7 +126,7 @@ impl Analyzer {
         let new_by_key: HashMap<_, _> = new_processes
             .values()
             .map(|p| {
-                let key = p.hash_key();
+                let key = p.hash_key_string();
                 (key, p.clone())
             })
             .collect();
@@ -221,7 +221,7 @@ impl Analyzer {
             || new_proc.exe_size != old_proc.exe_size
             || new_proc.open_files_count != old_proc.open_files_count
             || new_proc.shared_memory != old_proc.shared_memory {
-            let key = new_proc.hash_key();
+            let key = new_proc.hash_key_string();
             diff.changed_processes.insert(
                 key,
                 ProcessDiff {

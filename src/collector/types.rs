@@ -19,12 +19,17 @@ pub struct ProcessInfo {
 
 impl ProcessInfo {
     // 获取进程的唯一标识，内核线程使用name，普通进程使用exe_path
-    pub fn hash_key(&self) -> String {
-        if self.is_kthread {
-            self.name.clone()
+    pub fn hash_key(&self) -> (i32, String) {
+        if self.is_kthread || self.exe_size == 0 {
+            (self.pid, self.name.clone())
         } else {
-            self.exe_path.to_string_lossy().to_string()
+            (self.pid, self.exe_path.to_string_lossy().to_string())
         }
+    }
+
+    pub fn hash_key_string(&self) -> String {
+        let (pid, name) = self.hash_key();
+        format!("{}:{}", pid, name)
     }
 }
 

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::fs;
 use serde_json;
 use log::info;
-use csv::Writer; // 添加 CSV 写入器
+use csv::Writer; // 添加 CSV 写入器 // 添加 CSV 写入器
 
 #[derive(Debug, Copy, Clone)]
 pub enum ProcessChangeType {
@@ -492,7 +492,7 @@ impl Reporter {
         if !kernel_processes.is_empty() {
             report.push_str("#### 新增内核线程\n\n");
             for (name, _process) in kernel_processes {
-                report.push_str(&format!("🔴 {}\n", name));
+                report.push_str(&format!("* 🔴 {}\n", name));
             }
             report.push_str("\n");
         }
@@ -500,7 +500,7 @@ impl Reporter {
         if !removed_kernel_processes.is_empty() {
             report.push_str("#### 移除内核线程\n\n");
             for (name, _process) in removed_kernel_processes {
-                report.push_str(&format!("🟢 {}\n", name));
+                report.push_str(&format!("* 🟢 {}\n", name));
             }
             report.push_str("\n");
         }
@@ -697,7 +697,7 @@ impl Reporter {
             } else {
                 process.rss
             };
-            wtr.write_record(&[name, "0", &Self::bytes_to_mb(mem as i64), &Self::bytes_to_mb(mem as i64)])?;
+            wtr.write_record(&[&name, "0", &Self::bytes_to_mb(mem as i64), &Self::bytes_to_mb(mem as i64)])?;
         }
 
         // 已删除进程
@@ -723,7 +723,7 @@ impl Reporter {
                 proc_diff.new_process.rss
             };
             let mem_change = (new_mem as i64) - (old_mem as i64);
-            wtr.write_record(&[name, &Self::bytes_to_mb(old_mem as i64), &Self::bytes_to_mb(new_mem as i64), &Self::bytes_to_mb(mem_change)])?;
+            wtr.write_record(&[&name, &Self::bytes_to_mb(old_mem as i64), &Self::bytes_to_mb(new_mem as i64), &Self::bytes_to_mb(mem_change)])?;
         }
 
         wtr.flush()?;
