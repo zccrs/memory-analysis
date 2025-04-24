@@ -142,21 +142,33 @@ read -s -p "请输入sudo密码: " SUDO_PASSWORD
 echo
 
 echo "在主机1上采集数据..."
-ssh -tt $SSH_OPTS1 "$REMOTE_HOST1" "cd $REMOTE_TEMP_DIR1 && chmod +x $BINARY_NAME && echo '$SUDO_PASSWORD' | sudo -S ./$BINARY_NAME $MAX_PROCESSES ." & SSH_PID1=$!
-wait $SSH_PID1 || {
-    echo "错误: 主机1执行失败"
+ssh -tt $SSH_OPTS1 "$REMOTE_HOST1" "cd $REMOTE_TEMP_DIR1 && chmod +x $BINARY_NAME && echo '$SUDO_PASSWORD' | sudo -S ./$BINARY_NAME --log-level=debug $MAX_PROCESSES ." & SSH_PID1=$!
+wait $SSH_PID1
+SSH_STATUS1=$?
+
+if [ $SSH_STATUS1 -ne 0 ]; then
+    echo "错误: 主机1执行失败，正在获取更多信息..."
+    ssh $SSH_OPTS1 "$REMOTE_HOST1" "echo '$SUDO_PASSWORD' | sudo -S ls -l /boot/ /usr/lib/modules/ /usr/lib/boot/ 2>/dev/null"
+    ssh $SSH_OPTS1 "$REMOTE_HOST1" "echo '$SUDO_PASSWORD' | sudo -S uname -a"
+    ssh $SSH_OPTS1 "$REMOTE_HOST1" "echo '$SUDO_PASSWORD' | sudo -S id"
     ssh "$REMOTE_HOST1" "rm -rf $REMOTE_TEMP_DIR1"
     exit 1
-}
+fi
 SSH_PID1=""
 
 echo "在主机2上采集数据..."
-ssh -tt $SSH_OPTS2 "$REMOTE_HOST2" "cd $REMOTE_TEMP_DIR2 && chmod +x $BINARY_NAME && echo '$SUDO_PASSWORD' | sudo -S ./$BINARY_NAME $MAX_PROCESSES ." & SSH_PID2=$!
-wait $SSH_PID2 || {
-    echo "错误: 主机2执行失败"
+ssh -tt $SSH_OPTS2 "$REMOTE_HOST2" "cd $REMOTE_TEMP_DIR2 && chmod +x $BINARY_NAME && echo '$SUDO_PASSWORD' | sudo -S ./$BINARY_NAME --log-level=debug $MAX_PROCESSES ." & SSH_PID2=$!
+wait $SSH_PID2
+SSH_STATUS2=$?
+
+if [ $SSH_STATUS2 -ne 0 ]; then
+    echo "错误: 主机2执行失败，正在获取更多信息..."
+    ssh $SSH_OPTS2 "$REMOTE_HOST2" "echo '$SUDO_PASSWORD' | sudo -S ls -l /boot/ /usr/lib/modules/ /usr/lib/boot/ 2>/dev/null"
+    ssh $SSH_OPTS2 "$REMOTE_HOST2" "echo '$SUDO_PASSWORD' | sudo -S uname -a"
+    ssh $SSH_OPTS2 "$REMOTE_HOST2" "echo '$SUDO_PASSWORD' | sudo -S id"
     ssh "$REMOTE_HOST2" "rm -rf $REMOTE_TEMP_DIR2"
     exit 1
-}
+fi
 SSH_PID2=""
 
 echo "Step 5: 复制结果文件到本地..."

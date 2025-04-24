@@ -133,31 +133,152 @@ impl Collector {
             let mut kernel_file_size = 0;
             let mut initrd_file_size = 0;
 
-            // 尝试不同的内核文件命名方式
-            for kernel_path in &[
-                format!("/boot/vmlinuz-{}", kernel_version_clean),
-                format!("/boot/vmlinuz-linux"),
-                format!("/boot/vmlinuz")
-            ] {
-                if let Ok((size, _)) = executor.execute_sudo_command(&format!("stat -c %s {} 2>/dev/null", kernel_path)) {
-                    if let Ok(s) = size.trim().parse::<u64>() {
-                        kernel_file_size = s;
+            debug!("正在搜索当前正在使用的内核文件...");
+
+            // 首先尝试通过/proc/cmdline获取当前使用的内核文件
+            let mut current_kernel_path = None;
+            if let Ok((cmdline, _)) = executor.execute_sudo_command("cat /proc/cmdline") {
+                debug!("内核启动参数: {}", cmdline.trim());
+                for part in cmdline.split_whitespace() {
+                    if part.starts_with("BOOT_IMAGE=") {
+                        current_kernel_path = Some(part.trim_start_matches("BOOT_IMAGE=").to_string());
                         break;
                     }
                 }
             }
 
-            // 尝试不同的initrd文件命名方式
-            for initrd_path in &[
-                format!("/boot/initramfs-{}.img", kernel_version_clean),
-                format!("/boot/initramfs-linux.img"),
-                format!("/boot/initrd.img")
-            ] {
-                if let Ok((size, _)) = executor.execute_sudo_command(&format!("stat -c %s {} 2>/dev/null", initrd_path)) {
-                    if let Ok(s) = size.trim().parse::<u64>() {
-                        initrd_file_size = s;
+            // 如果从cmdline获取失败，使用uname -r获取当前运行的内核版本
+            if current_kernel_path.is_none() {
+                let (kernel_release, _) = executor.execute_sudo_command("uname -r")?;
+                let kernel_release = kernel_release.trim();
+                debug!("当前运行的内核版本: {}", kernel_release);
+
+                // 构造可能的内核文件路径
+                let possible_paths = vec![
+                    format!("/boot/vmlinuz-{}", kernel_release),
+                    format!("/usr/lib/modules/{}/vmlinuz", kernel_release),
+                    format!("/usr/lib/boot/vmlinuz-{}", kernel_release)
+                ];
+
+                // 检查这些路径是否存在
+                for path in &possible_paths {
+                    if let Ok((_, _)) = executor.execute_sudo_command(&format!("test -f {}", path)) {
+                        current_kernel_path = Some(path.clone());
+                        debug!("根据内核版本找到内核文件: {}", path);
                         break;
                     }
+                }
+            }
+
+            // 无论是否找到当前内核，都进行完整搜索以确保不会遗漏
+            let (kernel_find, _) = executor.execute_sudo_command(
+                &format!(
+                    "find /boot /usr/lib/modules /usr/lib/boot -type f \\( -name 'vmlinuz*' -o -name 'vmlinux*' -o -name 'kernel*' \\) 2>/dev/null"
+                )
+            )?;
+
+            let mut kernel_paths: Vec<String> = kernel_find.split('\n')
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .collect();
+
+            // 如果找到了当前正在使用的内核文件路径，将其放在列表最前面
+            if let Some(current_path) = current_kernel_path {
+                if let Some(pos) = kernel_paths.iter().position(|p| p.contains(&current_path)) {
+                    let current = kernel_paths.remove(pos);
+                    kernel_paths.insert(0, current);
+                } else {
+                    kernel_paths.insert(0, current_path);
+                }
+            }
+
+            debug!("发现以下内核文件（按优先级排序）:\n{}", kernel_paths.join("\n"));
+
+            // 遍历排序后的内核文件列表
+            for kernel_path in &kernel_paths {
+                match executor.execute_sudo_command(&format!("stat -c %s {}", kernel_path)) {
+                    Ok((size, _)) => {
+                        if let Ok(s) = size.trim().parse::<u64>() {
+                            kernel_file_size = s;
+                            debug!("使用内核文件: {} (大小: {})", kernel_path, format_size(s));
+                            break;
+                        }
+                    }
+                    Err(e) => debug!("无法获取内核文件 {} 的大小: {}", kernel_path, e),
+                }
+            }
+
+            debug!("正在搜索当前正在使用的initramfs文件...");
+
+            // 从/proc/cmdline中查找initrd信息
+            let mut current_initrd_path = None;
+            if let Ok((cmdline, _)) = executor.execute_sudo_command("cat /proc/cmdline") {
+                for part in cmdline.split_whitespace() {
+                    if part.starts_with("initrd=") || part.starts_with("initramfs=") {
+                        current_initrd_path = Some(part.split('=').nth(1).unwrap().to_string());
+                        break;
+                    }
+                }
+            }
+
+            // 使用find命令搜索可能的initramfs文件
+            let (initrd_find, _) = executor.execute_sudo_command(
+                &format!(
+                    "find /boot /usr/lib/modules /usr/lib/boot -type f \\( -name 'initramfs*' -o -name 'initrd*' -o -name 'booster*' \\) 2>/dev/null"
+                )
+            )?;
+
+            let mut initrd_paths: Vec<String> = initrd_find.split('\n')
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .collect();
+
+            // 如果找到了当前正在使用的initramfs文件路径，将其放在列表最前面
+            if let Some(current_path) = current_initrd_path {
+                if let Some(pos) = initrd_paths.iter().position(|p| p.contains(&current_path)) {
+                    let current = initrd_paths.remove(pos);
+                    initrd_paths.insert(0, current);
+                } else {
+                    initrd_paths.insert(0, current_path);
+                }
+            } else {
+                // 如果没有从cmdline找到，将与当前内核版本匹配的文件放在前面
+                initrd_paths.sort_by(|a, b| {
+                    let a_matches = a.contains(kernel_version_clean);
+                    let b_matches = b.contains(kernel_version_clean);
+                    b_matches.cmp(&a_matches)
+                });
+            }
+
+            debug!("发现以下initramfs文件（按优先级排序）:\n{}", initrd_paths.join("\n"));
+
+            // 遍历排序后的initramfs文件列表
+            for initrd_path in &initrd_paths {
+                match executor.execute_sudo_command(&format!("stat -c %s {}", initrd_path)) {
+                    Ok((size, _)) => {
+                        if let Ok(s) = size.trim().parse::<u64>() {
+                            initrd_file_size = s;
+                            debug!("使用initramfs文件: {} (大小: {})", initrd_path, format_size(s));
+                            break;
+                        }
+                    }
+                    Err(e) => debug!("无法获取initramfs文件 {} 的大小: {}", initrd_path, e),
+                }
+            }
+
+            if kernel_file_size == 0 {
+                debug!("警告：未找到任何内核文件");
+                // 尝试使用uname -v获取更多信息
+                if let Ok((uname_v, _)) = executor.execute_sudo_command("uname -v") {
+                    debug!("内核构建信息: {}", uname_v.trim());
+                }
+            }
+
+            if initrd_file_size == 0 {
+                debug!("警告：未找到任何initramfs文件");
+                // 检查dracut或mkinitcpio是否安装
+                if let Ok((initramfs_tools, _)) = executor.execute_sudo_command("which dracut mkinitcpio 2>/dev/null") {
+                    debug!("已安装的initramfs工具: {}", initramfs_tools.trim());
                 }
             }
 
