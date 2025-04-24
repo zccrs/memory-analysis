@@ -3,6 +3,7 @@ use anyhow::Result;
 use log::{info, debug};
 use std::collections::HashMap;
 use byte_unit::Byte;
+use regex::Regex;
 
 #[derive(Debug, serde::Serialize)]
 pub struct MemoryDiff {
@@ -41,6 +42,23 @@ pub struct SystemDiff {
 pub struct Analyzer;
 
 impl Analyzer {
+    // 提取文件的基本名称（只保留字母）
+    fn extract_base_name(path: &str) -> String {
+        lazy_static::lazy_static! {
+            static ref ALPHA_RE: Regex = Regex::new(r"[a-zA-Z]+").unwrap();
+        }
+
+        // 获取文件名
+        let file_name = path.split('/').last().unwrap_or(path);
+
+        // 提取所有字母序列并连接
+        ALPHA_RE.find_iter(file_name)
+            .map(|m| m.as_str())
+            .collect::<Vec<_>>()
+            .join("")
+            .to_lowercase()
+    }
+
     pub fn analyze(host1_data: CollectionResult, host2_data: CollectionResult) -> Result<MemoryDiff> {
         info!("开始分析内存差异...");
 
@@ -78,33 +96,48 @@ impl Analyzer {
     ) -> Result<()> {
         debug!("分析进程变化...");
 
-        // 创建进程名到进程信息的映射
-        let old_by_name: HashMap<_, _> = old_processes
+        // 创建进程名和可执行文件到进程信息的映射
+        let old_by_name_and_exe: HashMap<_, _> = old_processes
             .values()
-            .map(|p| (p.name.clone(), p.clone()))
+            .map(|p| {
+                let exe_base_name = Self::extract_base_name(&p.exe_path.to_string_lossy());
+                ((p.name.clone(), exe_base_name), p.clone())
+            })
             .collect();
 
-        let new_by_name: HashMap<_, _> = new_processes
+        let new_by_name_and_exe: HashMap<_, _> = new_processes
             .values()
-            .map(|p| (p.name.clone(), p.clone()))
+            .map(|p| {
+                let exe_base_name = Self::extract_base_name(&p.exe_path.to_string_lossy());
+                ((p.name.clone(), exe_base_name), p.clone())
+            })
             .collect();
 
         // 查找新增和删除的进程
-        for (name, process) in &new_by_name {
-            if !old_by_name.contains_key(name) {
+        for ((name, exe_base), process) in &new_by_name_and_exe {
+            let old_exists = old_by_name_and_exe.iter().any(|((old_name, old_exe), _)| {
+                name == old_name && exe_base == old_exe
+            });
+            if !old_exists {
                 diff.new_processes.insert(name.clone(), process.clone());
             }
         }
 
-        for (name, process) in &old_by_name {
-            if !new_by_name.contains_key(name) {
+        for ((name, exe_base), process) in &old_by_name_and_exe {
+            let new_exists = new_by_name_and_exe.iter().any(|((new_name, new_exe), _)| {
+                name == new_name && exe_base == new_exe
+            });
+            if !new_exists {
                 diff.removed_processes.insert(name.clone(), process.clone());
             }
         }
 
-        // 分析相同名称进程的变化
-        for (name, old_proc) in &old_by_name {
-            if let Some(new_proc) = new_by_name.get(name) {
+        // 分析相同进程的变化
+        for ((old_name, old_exe), old_proc) in &old_by_name_and_exe {
+            if let Some(new_proc) = new_by_name_and_exe.iter()
+                .find(|((new_name, new_exe), _)| old_name == new_name && old_exe == new_exe)
+                .map(|(_, p)| p)
+            {
                 Self::analyze_process_diff(old_proc, new_proc, diff)?;
             }
         }
@@ -125,30 +158,36 @@ impl Analyzer {
 
         let mut library_changes = Vec::new();
 
-        // 分析动态库变化
+        // 使用基本名称创建动态库映射
         let old_libs: HashMap<_, _> = old_proc.libraries
             .iter()
-            .map(|lib| (lib.path.to_string_lossy().to_string(), lib))
+            .map(|lib| {
+                let base_name = Self::extract_base_name(&lib.path.to_string_lossy());
+                (base_name, (lib.path.to_string_lossy().to_string(), lib))
+            })
             .collect();
 
         let new_libs: HashMap<_, _> = new_proc.libraries
             .iter()
-            .map(|lib| (lib.path.to_string_lossy().to_string(), lib))
+            .map(|lib| {
+                let base_name = Self::extract_base_name(&lib.path.to_string_lossy());
+                (base_name, (lib.path.to_string_lossy().to_string(), lib))
+            })
             .collect();
 
         // 查找修改和删除的库
-        for (path, old_lib) in &old_libs {
-            if let Some(new_lib) = new_libs.get(path) {
+        for (base_name, (old_path, old_lib)) in &old_libs {
+            if let Some((new_path, new_lib)) = new_libs.get(base_name) {
                 if old_lib.size != new_lib.size {
                     library_changes.push(LibraryChange {
-                        old_path: Some(path.clone()),
-                        new_path: Some(path.clone()),
+                        old_path: Some(old_path.clone()),
+                        new_path: Some(new_path.clone()),
                         size_diff: new_lib.size as i64 - old_lib.size as i64,
                     });
                 }
             } else {
                 library_changes.push(LibraryChange {
-                    old_path: Some(path.clone()),
+                    old_path: Some(old_path.clone()),
                     new_path: None,
                     size_diff: -(old_lib.size as i64),
                 });
@@ -156,11 +195,11 @@ impl Analyzer {
         }
 
         // 查找新增的库
-        for (path, new_lib) in &new_libs {
-            if !old_libs.contains_key(path) {
+        for (base_name, (new_path, new_lib)) in &new_libs {
+            if !old_libs.contains_key(base_name) {
                 library_changes.push(LibraryChange {
                     old_path: None,
-                    new_path: Some(path.clone()),
+                    new_path: Some(new_path.clone()),
                     size_diff: new_lib.size as i64,
                 });
             }

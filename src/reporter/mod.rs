@@ -58,7 +58,7 @@ impl Reporter {
         report.push_str("   - 被跳过的进程数量会记录在统计信息中\n\n");
 
         report.push_str("4. **进程状态说明**\n");
-        report.push_str("   - "进程已终止"：表示该进程在第一次采集时存在，但在第二次采集时已不存在\n");
+        report.push_str("   - 进程已终止：表示该进程在第一次采集时存在，但在第二次采集时已不存在\n");
         report.push_str("   - 这类进程会显示释放的内存大小和原可执行文件路径\n");
         report.push_str("   - 进程终止通常意味着其占用的内存已被释放\n\n");
 
@@ -218,12 +218,12 @@ impl Reporter {
         for (name, mem_change, is_current, process) in sorted_processes {
             report.push_str(&format!("#### {} ({:+})\n", name, Analyzer::format_bytes(mem_change)));
             if is_current {
-                report.push_str(&format!("- 可执行文件：{}\n", process.exe_path.display()));
+                report.push_str(&format!("- 当前可执行文件路径：{}\n", process.exe_path.display()));
                 report.push_str(&format!("- 打开文件数：{}\n", process.open_files_count));
                 report.push_str(&format!("- 加载动态库：{} 个\n", process.libraries.len()));
             } else {
                 report.push_str("- 进程已终止\n");
-                report.push_str(&format!("- 原可执行文件：{}\n", process.exe_path.display()));
+                report.push_str(&format!("- 原可执行文件路径：{}\n", process.exe_path.display()));
             }
             report.push_str("\n");
         }
@@ -254,9 +254,14 @@ impl Reporter {
                     for lib in &proc_diff.library_changes {
                         match (&lib.old_path, &lib.new_path) {
                             (Some(old), Some(new)) if old == new => {
-                                report.push_str(&format!("  - 库大小变化 {}：{}\n",
-                                    old,
-                                    Analyzer::format_bytes(lib.size_diff)));
+                if old == new {
+                    report.push_str(&format!("  - 库大小变化 {}：{}\n",
+                        old,
+                        Analyzer::format_bytes(lib.size_diff)));
+                } else {
+                    report.push_str(&format!("  - 库路径变更并且大小变化：\n    - 原路径：{}\n    - 新路径：{}\n    - 大小变化：{}\n",
+                        old, new, Analyzer::format_bytes(lib.size_diff)));
+                }
                             }
                             (Some(old), None) => {
                                 report.push_str(&format!("  - 移除库 {}\n", old));
