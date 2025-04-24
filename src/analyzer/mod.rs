@@ -13,6 +13,8 @@ pub struct MemoryDiff {
     pub changed_processes: HashMap<String, ProcessDiff>,
     pub system_changes: SystemDiff,
     pub current_user_id: u32,
+    pub old_os_release: String,  // 旧系统版本名称
+    pub new_os_release: String,  // 新系统版本名称
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -83,6 +85,8 @@ impl Analyzer {
                 new_initramfs_size: Some(host2_data.system_info.initrd_file_size as i64),
             },
             current_user_id: unsafe { libc::geteuid() },
+            old_os_release: host1_data.system_info.os_release,
+            new_os_release: host2_data.system_info.os_release,
         };
 
         // 分析进程变化

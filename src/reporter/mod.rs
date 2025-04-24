@@ -64,28 +64,44 @@ impl Reporter {
         report.push_str("   - 进程内存总和 = 所有进程的 PSS 总和\n");
         report.push_str("   - 内核内存 = 系统总使用内存 - 进程内存总和\n\n");
         report.push_str("3. **统计范围说明**\n");
-        report.push_str("   - 跳过 kworker 等内核工作线程\n");
         report.push_str("   - 可通过 --max-processes 参数限制采集进程数量\n");
         report.push_str("   - 被跳过的进程数量会记录在统计信息中\n\n");
 
         report.push_str("4. **进程状态说明**\n");
-        report.push_str("   - 进程已终止：表示该进程在第一次采集时存在，但在第二次采集时已不存在\n");
-        report.push_str("   - 这类进程会显示释放的内存大小和原可执行文件路径\n");
-        report.push_str("   - 进程终止通常意味着其占用的内存已被释放\n\n");
+        report.push_str("   - 新增进程：在新系统中出现，但在旧系统中不存在的进程\n");
+        report.push_str("   - 移除进程：在旧系统中存在，但在新系统中不存在的进程\n");
+        report.push_str("   - 变化进程：在新旧系统中都存在，但内存使用或其他特征发生变化的进程\n\n");
 
-        report.push_str(&format!("本报告是 {} 相对于 {} 的内存使用情况。\n\n", new_identifier, old_identifier));
-        report.push_str(&format!("总进程数量（{}）：{}\n", new_identifier, diff.new_processes.len() + diff.changed_processes.len()));
-        report.push_str(&format!("总进程数量（{}）：{}\n", old_identifier, diff.removed_processes.len() + diff.changed_processes.len()));
+        // 使用 os_release 或备选名称作为系统标识
+        let old_name = if !diff.old_os_release.trim().is_empty() {
+            &diff.old_os_release
+        } else if !old_identifier.trim().is_empty() {
+            old_identifier
+        } else {
+            "旧系统"
+        };
+
+        let new_name = if !diff.new_os_release.trim().is_empty() {
+            &diff.new_os_release
+        } else if !new_identifier.trim().is_empty() {
+            new_identifier
+        } else {
+            "新系统"
+        };
+
+        report.push_str(&format!("本报告是 {} 相对于 {} 的内存使用情况。\n\n", new_name, old_name));
+        report.push_str(&format!("总进程数量（{}）：{}\n", new_name, diff.new_processes.len() + diff.changed_processes.len()));
+        report.push_str(&format!("总进程数量（{}）：{}\n", old_name, diff.removed_processes.len() + diff.changed_processes.len()));
         report.push_str(&format!("新增进程数量：{}\n", diff.new_processes.len()));
         report.push_str(&format!("移除进程数量：{}\n\n", diff.removed_processes.len()));
 
-        report.push_str(&format!("本报告对比了 {} 和 {} 的内存使用情况。\n\n", old_identifier, new_identifier));
+        report.push_str(&format!("本报告对比了 {} 和 {} 的内存使用情况。\n\n", old_name, new_name));
 
         // 统计新旧系统的基本信息
         report.push_str("# 综述\n\n");
 
         // 旧系统信息
-        report.push_str("## 旧系统\n\n");
+        report.push_str(&format!("## {}\n\n", old_name));
         let old_total = diff.removed_processes.len() + diff.changed_processes.len();
         let old_kernel_count = diff.removed_processes.values()
             .chain(diff.changed_processes.values().map(|p| &p.old_process))
@@ -106,7 +122,7 @@ impl Reporter {
         report.push_str(&format!("  - 用户进程：{}\n\n", old_user_count));
 
         // 新系统信息
-        report.push_str("## 新系统\n\n");
+        report.push_str(&format!("## {}\n\n", new_name));
         let new_total = diff.new_processes.len() + diff.changed_processes.len();
         let new_kernel_count = diff.new_processes.values()
             .chain(diff.changed_processes.values().map(|p| &p.new_process))
