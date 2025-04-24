@@ -1,6 +1,6 @@
 use crate::collector::{CollectionResult, ProcessInfo, SystemInfo};
 use anyhow::Result;
-use log::{info, debug};
+use log::{debug, info, warn};
 use std::collections::HashMap;
 use byte_unit::Byte;
 use regex::Regex;
@@ -114,58 +114,41 @@ impl Analyzer {
     ) -> Result<()> {
         debug!("分析进程变化...");
 
-        // 创建进程名和可执行文件到进程信息的映射
-        let old_by_name_and_exe: HashMap<_, _> = old_processes
+        // 创建进程映射，使用exe_path或name作为key
+        let old_by_key: HashMap<_, _> = old_processes
             .values()
             .map(|p| {
-                let exe_base_name = Self::extract_base_name(&p.exe_path.to_string_lossy());
-                ((p.name.clone(), exe_base_name), p.clone())
-            })
-            .collect();
-        let new_by_name_and_exe: HashMap<_, _> = new_processes
-            .values()
-            .map(|p| {
-                let exe_base_name = Self::extract_base_name(&p.exe_path.to_string_lossy());
-                ((p.name.clone(), exe_base_name), p.clone())
+                let key = p.hash_key();
+                (key, p.clone())
             })
             .collect();
 
-        // 查找新增的进程（确保同名进程不会重复计入）
-        for ((name, exe_base), process) in &new_by_name_and_exe {
-            // 检查是否在旧进程中存在同名同exe的进程
-            let old_exists = old_by_name_and_exe.iter().any(|((old_name, old_exe), _)| {
-                name == old_name && exe_base == old_exe
-            });
+        let new_by_key: HashMap<_, _> = new_processes
+            .values()
+            .map(|p| {
+                let key = p.hash_key();
+                (key, p.clone())
+            })
+            .collect();
 
-            // 如果在旧进程中不存在，且不是简单的exe路径变化，则认为是新增进程
-            if !old_exists {
-                // 进一步检查是否只是exe路径变化了
-                let similar_process_exists = old_by_name_and_exe.iter().any(|((old_name, _), _)| {
-                    name == old_name
-                });
+        debug!("原始的旧进程数量: {}, 原始的新进程数量: {}", old_processes.len(), new_processes.len());
+        debug!("解析后的旧进程数量: {}, 解析后的新进程数量: {}", old_by_key.len(), new_by_key.len());
 
-                if !similar_process_exists {
-                    diff.new_processes.insert(name.clone(), process.clone());
-                }
+        // 遍历新进程，查找新增和变化的进程
+        for (key, new_process) in &new_by_key {
+            if let Some(old_process) = old_by_key.get(key) {
+                // 进程存在于两个系统中，检查是否有变化
+                Self::analyze_process_diff(old_process, new_process, diff)?;
+            } else {
+                // 新增进程
+                diff.new_processes.insert(key.clone(), new_process.clone());
             }
         }
 
-        for ((name, exe_base), process) in &old_by_name_and_exe {
-            let new_exists = new_by_name_and_exe.iter().any(|((new_name, new_exe), _)| {
-                name == new_name && exe_base == new_exe
-            });
-            if !new_exists {
-                diff.removed_processes.insert(name.clone(), process.clone());
-            }
-        }
-
-        // 分析相同进程的变化
-        for ((old_name, old_exe), old_proc) in &old_by_name_and_exe {
-            if let Some(new_proc) = new_by_name_and_exe.iter()
-                .find(|((new_name, new_exe), _)| old_name == new_name && old_exe == new_exe)
-                .map(|(_, p)| p)
-            {
-                Self::analyze_process_diff(old_proc, new_proc, diff)?;
+        // 查找已删除的进程
+        for (key, old_process) in &old_by_key {
+            if !new_by_key.contains_key(key) {
+                diff.removed_processes.insert(key.clone(), old_process.clone());
             }
         }
 
@@ -238,9 +221,10 @@ impl Analyzer {
             || new_proc.exe_size != old_proc.exe_size
             || new_proc.open_files_count != old_proc.open_files_count
             || new_proc.shared_memory != old_proc.shared_memory {
+            let key = new_proc.hash_key();
             diff.changed_processes.insert(
-            old_proc.name.clone(),
-            ProcessDiff {
+                key,
+                ProcessDiff {
                 old_process: old_proc.clone(),
                 new_process: new_proc.clone(),
                 memory_diff,

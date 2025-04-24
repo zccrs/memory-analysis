@@ -17,6 +17,17 @@ pub struct ProcessInfo {
     pub user_id: u32,  // 进程所属用户的ID
 }
 
+impl ProcessInfo {
+    // 获取进程的唯一标识，内核线程使用name，普通进程使用exe_path
+    pub fn hash_key(&self) -> String {
+        if self.is_kthread {
+            self.name.clone()
+        } else {
+            self.exe_path.to_string_lossy().to_string()
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LibraryInfo {
     pub path: PathBuf,

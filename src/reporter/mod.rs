@@ -103,6 +103,11 @@ impl Reporter {
             "新系统"
         };
 
+        info!("解析到的新增进程数量：{}、移除进程数量：{}、变化进程数量：{}",
+              diff.new_processes.len(),
+              diff.removed_processes.len(),
+              diff.changed_processes.len());
+
         report.push_str(&format!("本报告是 {} 相对于 {} 的内存使用情况。\n\n", new_name, old_name));
         // 统计新旧系统的总进程数（包括被跳过的进程）
         let new_total = diff.new_processes.len() + diff.changed_processes.len() + diff.new_system_info.skipped_processes;
@@ -119,13 +124,12 @@ impl Reporter {
 
         // 旧系统信息
         report.push_str(&format!("## {}\n\n", old_name));
-        // 统计旧系统的进程总数（包括deleted进程和changed进程中的old进程）
-        let old_total = diff.removed_processes.len() + diff.changed_processes.len();
 
         // 创建一个包含所有旧进程的迭代器
         let old_processes = diff.removed_processes.values()
             .map(|p| p as &ProcessInfo)
             .chain(diff.changed_processes.values().map(|p| &p.old_process));
+        info!("解析到旧系统的进程数量：{}", old_processes.clone().count());
 
         // 统计内核进程数量
         let old_kernel_count = old_processes
@@ -169,14 +173,13 @@ impl Reporter {
 
         // 新系统信息
         report.push_str(&format!("## {}\n\n", new_name));
-        // 统计新系统中的实际总进程数
-        let new_total = diff.new_processes.len() + diff.changed_processes.len() + diff.new_system_info.skipped_processes;
 
         // 获取所有新系统的进程
         // 包括新增的进程和更改后的进程
         let processes_new_system = diff.new_processes.values()
             .chain(diff.changed_processes.values().map(|p| &p.new_process))
             .collect::<Vec<_>>();
+        info!("解析到新系统的进程数量：{}", processes_new_system.len());
 
         // 统计不同类型的进程数量
         let new_kernel_count = processes_new_system.iter()
