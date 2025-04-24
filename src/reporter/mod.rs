@@ -10,6 +10,11 @@ use csv::Writer; // 添加 CSV 写入器
 pub struct Reporter;
 
 impl Reporter {
+    fn is_kernel_process(process: &ProcessInfo) -> bool {
+        // 内核进程的exe_path是空的
+        process.exe_path.as_os_str().is_empty()
+    }
+
     pub fn generate_report(diff: &MemoryDiff, output_dir: &Path, old_identifier: &str, new_identifier: &str) -> Result<(PathBuf, PathBuf, PathBuf)> {
         info!("生成分析报告...");
 
@@ -105,20 +110,20 @@ impl Reporter {
         let old_total = diff.removed_processes.len() + diff.changed_processes.len();
         let old_kernel_count = diff.removed_processes.values()
             .chain(diff.changed_processes.values().map(|p| &p.old_process))
-            .filter(|p| p.exe_path.to_string_lossy().contains("kernel"))
+            .filter(|p| Self::is_kernel_process(p))
             .count();
         let old_system_count = diff.removed_processes.values()
             .chain(diff.changed_processes.values().map(|p| &p.old_process))
-            .filter(|p| !p.exe_path.to_string_lossy().contains("kernel") && p.user_id != diff.current_user_id)
+            .filter(|p| !Self::is_kernel_process(p) && p.user_id != diff.current_user_id)
             .count();
         let old_user_count = diff.removed_processes.values()
             .chain(diff.changed_processes.values().map(|p| &p.old_process))
-            .filter(|p| p.user_id == diff.current_user_id)
+            .filter(|p| !Self::is_kernel_process(p) && p.user_id == diff.current_user_id)
             .count();
 
         report.push_str(&format!("- 总进程数：{}\n", old_total));
-        report.push_str(&format!("  - 内核进程：{}\n", old_kernel_count));
-        report.push_str(&format!("  - 系统进程：{}\n", old_system_count));
+        report.push_str(&format!("  - 内核进程：{} (无exe_path)\n", old_kernel_count));
+        report.push_str(&format!("  - 系统进程：{} (非用户进程)\n", old_system_count));
         report.push_str(&format!("  - 用户进程：{}\n\n", old_user_count));
 
         // 新系统信息
@@ -126,30 +131,30 @@ impl Reporter {
         let new_total = diff.new_processes.len() + diff.changed_processes.len();
         let new_kernel_count = diff.new_processes.values()
             .chain(diff.changed_processes.values().map(|p| &p.new_process))
-            .filter(|p| p.exe_path.to_string_lossy().contains("kernel"))
+            .filter(|p| Self::is_kernel_process(p))
             .count();
         let new_system_count = diff.new_processes.values()
             .chain(diff.changed_processes.values().map(|p| &p.new_process))
-            .filter(|p| !p.exe_path.to_string_lossy().contains("kernel") && p.user_id != diff.current_user_id)
+            .filter(|p| !Self::is_kernel_process(p) && p.user_id != diff.current_user_id)
             .count();
         let new_user_count = diff.new_processes.values()
             .chain(diff.changed_processes.values().map(|p| &p.new_process))
-            .filter(|p| p.user_id == diff.current_user_id)
+            .filter(|p| !Self::is_kernel_process(p) && p.user_id == diff.current_user_id)
             .count();
 
         report.push_str(&format!("- 总进程数：{}\n", new_total));
-        report.push_str(&format!("  - 内核进程：{}\n", new_kernel_count));
-        report.push_str(&format!("  - 系统进程：{}\n", new_system_count));
+        report.push_str(&format!("  - 内核进程：{} (无exe_path)\n", new_kernel_count));
+        report.push_str(&format!("  - 系统进程：{} (非用户进程)\n", new_system_count));
         report.push_str(&format!("  - 用户进程：{}\n\n", new_user_count));
 
         // 计算各类进程的内存变化
-        let mut kernel_new = 0i64;
+        let mut kernel_new = 0i64;      // 内核线程
         let mut kernel_removed = 0i64;
         let mut kernel_changed = 0i64;
-        let mut system_new = 0i64;
+        let mut system_new = 0i64;      // 系统进程（非用户进程）
         let mut system_removed = 0i64;
         let mut system_changed = 0i64;
-        let mut user_new = 0i64;
+        let mut user_new = 0i64;       // 当前用户的进程
         let mut user_removed = 0i64;
         let mut user_changed = 0i64;
         let mut total_libs = 0i64;
@@ -160,7 +165,7 @@ impl Reporter {
         // 统计新增进程
         for process in diff.new_processes.values() {
             let mem = if process.pss > 0 { process.pss as i64 } else { process.rss as i64 };
-            if process.exe_path.to_string_lossy().contains("kernel") {
+            if Self::is_kernel_process(process) {
                 kernel_new += mem;
             } else if process.user_id == diff.current_user_id {
                 user_new += mem;
@@ -172,7 +177,7 @@ impl Reporter {
         // 统计已删除进程
         for process in diff.removed_processes.values() {
             let mem = if process.pss > 0 { process.pss as i64 } else { process.rss as i64 };
-            if process.exe_path.to_string_lossy().contains("kernel") {
+            if Self::is_kernel_process(process) {
                 kernel_removed -= mem;
             } else if process.user_id == diff.current_user_id {
                 user_removed -= mem;
@@ -183,7 +188,7 @@ impl Reporter {
 
         // 统计变化的进程
         for proc_diff in diff.changed_processes.values() {
-            if proc_diff.new_process.exe_path.to_string_lossy().contains("kernel") {
+            if Self::is_kernel_process(&proc_diff.new_process) {
                 kernel_changed += proc_diff.memory_diff;
             } else if proc_diff.new_process.user_id == diff.current_user_id {
                 user_changed += proc_diff.memory_diff;
@@ -361,10 +366,10 @@ impl Reporter {
         // 内核线程变化
         report.push_str("### 内核线程变化\n\n");
         let kernel_processes: Vec<_> = diff.new_processes.iter()
-            .filter(|(_, p)| p.exe_path.to_string_lossy().contains("kernel"))
+            .filter(|(_, p)| Self::is_kernel_process(p))
             .collect();
         let removed_kernel_processes: Vec<_> = diff.removed_processes.iter()
-            .filter(|(_, p)| p.exe_path.to_string_lossy().contains("kernel"))
+            .filter(|(_, p)| Self::is_kernel_process(p))
             .collect();
 
         if !kernel_processes.is_empty() {
@@ -392,7 +397,7 @@ impl Reporter {
         for (name, process) in &diff.new_processes {
             let mem = if process.pss > 0 { process.pss } else { process.rss } as i64;
             let entry = (name, mem, true, process);
-            if process.exe_path.to_string_lossy().contains("kernel") {
+            if Self::is_kernel_process(process) {
                 kernel_processes.push(entry);
             } else if process.user_id == diff.current_user_id {
                 user_processes.push(entry);
@@ -403,7 +408,7 @@ impl Reporter {
         for (name, process) in &diff.removed_processes {
             let mem = if process.pss > 0 { process.pss } else { process.rss } as i64;
             let entry = (name, -mem, false, process);
-            if process.exe_path.to_string_lossy().contains("kernel") {
+            if Self::is_kernel_process(process) {
                 kernel_processes.push(entry);
             } else if process.user_id == diff.current_user_id {
                 user_processes.push(entry);
@@ -413,7 +418,7 @@ impl Reporter {
         }
         for (name, proc_diff) in &diff.changed_processes {
             let entry = (name, proc_diff.memory_diff, true, &proc_diff.new_process);
-            if proc_diff.new_process.exe_path.to_string_lossy().contains("kernel") {
+            if Self::is_kernel_process(&proc_diff.new_process) {
                 kernel_processes.push(entry);
             } else if proc_diff.new_process.user_id == diff.current_user_id {
                 user_processes.push(entry);
