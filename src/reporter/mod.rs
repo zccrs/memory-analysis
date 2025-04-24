@@ -552,7 +552,6 @@ impl Reporter {
         // 系统进程详细信息
         report.push_str("## 系统进程变化\n\n");
         // 添加系统进程的内存变化总结
-        let system_total_str = Analyzer::format_bytes(system_total);
 
         // 统计系统进程的具体变化
         let mut system_new_count = 0;
@@ -597,7 +596,6 @@ impl Reporter {
         // 用户进程详细信息
         report.push_str("## 用户进程变化\n\n");
         // 添加用户进程的内存变化总结
-        let user_total_str = Analyzer::format_bytes(user_total);
 
         // 统计用户进程的具体变化
         let mut user_new_count = 0;

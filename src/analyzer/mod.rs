@@ -143,16 +143,16 @@ impl Analyzer {
         debug!("原始的旧进程数量: {}, 原始的新进程数量: {}", old_processes.len(), new_processes.len());
         debug!("解析后的旧进程数量: {}, 解析后的新进程数量: {}", old_by_key.len(), new_by_key.len());
 
-        let mut usedOldPids = Vec::new();
+        let mut used_old_pids = Vec::new();
         // 遍历新进程，查找新增和变化的进程
         for (key, new_process) in &new_by_key {
             let mut same_process = false;
             let mut found_process = None;
             for (old_key, old_process) in &old_by_key {
-                if key.1 == old_key.1 && !usedOldPids.contains(&old_key.0) {
+                if key.1 == old_key.1 && !used_old_pids.contains(&old_key.0) {
                     found_process = Some(old_process);
                     same_process = true;
-                    usedOldPids.push(old_key.0);
+                    used_old_pids.push(old_key.0);
                     break;
                 }
             }
@@ -168,7 +168,7 @@ impl Analyzer {
 
         // 查找已删除的进程
         for (key, old_process) in &old_by_key {
-            if !usedOldPids.contains(&key.0) {
+            if !used_old_pids.contains(&key.0) {
                 // 使用进程的原始标识作为map的key
                 diff.removed_processes.insert(old_process.hash_key_string(), old_process.clone());
             }
