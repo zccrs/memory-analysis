@@ -197,8 +197,17 @@ echo "Step 4: 在远程主机上执行程序..."
 read -s -p "请输入sudo密码: " SUDO_PASSWORD
 echo
 
-echo "在主机1上采集数据..."
+# 在主机1上启动采集
+echo "在主机1上启动采集数据..."
 ssh -tt $SSH_OPTS1 "$REMOTE_HOST1" "cd $REMOTE_TEMP_DIR1 && chmod +x $BINARY_NAME && echo '$SUDO_PASSWORD' | sudo -S ./$BINARY_NAME --log-level=debug $MAX_PROCESSES ." & SSH_PID1=$!
+
+# 如果有第二台主机，同时启动采集
+if [ -n "$REMOTE_HOST2" ]; then
+    echo "在主机2上启动采集数据..."
+    ssh -tt $SSH_OPTS2 "$REMOTE_HOST2" "cd $REMOTE_TEMP_DIR2 && chmod +x $BINARY_NAME && echo '$SUDO_PASSWORD' | sudo -S ./$BINARY_NAME --log-level=debug $MAX_PROCESSES ." & SSH_PID2=$!
+fi
+
+# 等待主机1完成并检查结果
 wait $SSH_PID1
 SSH_STATUS1=$?
 
@@ -208,13 +217,21 @@ if [ $SSH_STATUS1 -ne 0 ]; then
     ssh $SSH_OPTS1 "$REMOTE_HOST1" "echo '$SUDO_PASSWORD' | sudo -S uname -a"
     ssh $SSH_OPTS1 "$REMOTE_HOST1" "echo '$SUDO_PASSWORD' | sudo -S id"
     ssh "$REMOTE_HOST1" "rm -rf $REMOTE_TEMP_DIR1"
+
+    # 如果主机1失败且主机2正在运行，终止主机2的任务
+    if [ -n "$REMOTE_HOST2" ] && [ -n "$SSH_PID2" ]; then
+        echo "由于主机1失败，正在终止主机2的任务..."
+        kill -TERM $SSH_PID2 2>/dev/null
+        ssh $SSH_OPTS2 "$REMOTE_HOST2" "rm -rf $REMOTE_TEMP_DIR2" 2>/dev/null
+    fi
+
     exit 1
 fi
 SSH_PID1=""
 
+# 如果有第二台主机，等待其完成并检查结果
 if [ -n "$REMOTE_HOST2" ]; then
-    echo "在主机2上采集数据..."
-    ssh -tt $SSH_OPTS2 "$REMOTE_HOST2" "cd $REMOTE_TEMP_DIR2 && chmod +x $BINARY_NAME && echo '$SUDO_PASSWORD' | sudo -S ./$BINARY_NAME --log-level=debug $MAX_PROCESSES ." & SSH_PID2=$!
+    echo "等待主机2采集完成..."
     wait $SSH_PID2
     SSH_STATUS2=$?
 
@@ -227,26 +244,50 @@ if [ -n "$REMOTE_HOST2" ]; then
         exit 1
     fi
     SSH_PID2=""
+    echo "两台主机的采集任务都已完成。"
+else
+    echo "主机1采集任务已完成。"
 fi
 
-echo "Step 5: 复制结果文件到本地..."
+echo "Step 5: 并行复制结果文件到本地..."
+# 启动主机1的复制任务
+echo "开始从主机1复制文件..."
 scp $SSH_OPTS1 -r "$REMOTE_HOST1:$REMOTE_TEMP_DIR1/*" "$LOCAL_RESULT_DIR/host1/" & SSH_PID1=$!
+
+# 如果有第二台主机，同时启动复制
+if [ -n "$REMOTE_HOST2" ]; then
+    echo "开始从主机2复制文件..."
+    scp $SSH_OPTS2 -r "$REMOTE_HOST2:$REMOTE_TEMP_DIR2/*" "$LOCAL_RESULT_DIR/host2/" & SSH_PID2=$!
+fi
+
+# 等待主机1的复制完成
+echo "等待主机1文件复制完成..."
 wait $SSH_PID1 || {
     echo "错误: 无法从主机1复制结果文件"
     ssh "$REMOTE_HOST1" "rm -rf $REMOTE_TEMP_DIR1"
+    # 如果主机2正在复制，等待其完成
+    if [ -n "$REMOTE_HOST2" ] && [ -n "$SSH_PID2" ]; then
+        wait $SSH_PID2
+    fi
     exit 1
 }
 SSH_PID1=""
 
+# 如果有第二台主机，等待其复制完成
 if [ -n "$REMOTE_HOST2" ]; then
-    scp $SSH_OPTS2 -r "$REMOTE_HOST2:$REMOTE_TEMP_DIR2/*" "$LOCAL_RESULT_DIR/host2/" & SSH_PID2=$!
+    echo "等待主机2文件复制完成..."
     wait $SSH_PID2 || {
         echo "错误: 无法从主机2复制结果文件"
         ssh "$REMOTE_HOST2" "rm -rf $REMOTE_TEMP_DIR2"
         exit 1
     }
     SSH_PID2=""
+    echo "两台主机的文件都已复制完成。"
+else
+    echo "主机1的文件已复制完成。"
+fi
 
+if [ -n "$REMOTE_HOST2" ]; then
     echo "Step 6: 执行对比分析..."
     echo "使用memory-analysis进行差异分析..."
     ./target/x86_64-unknown-linux-gnu/release/$BINARY_NAME --diff "$LOCAL_RESULT_DIR/host1" "$LOCAL_RESULT_DIR/host2" || {
