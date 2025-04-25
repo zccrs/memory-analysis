@@ -28,10 +28,10 @@ impl Collector {
                 output.push_str(&format!("名称: {}\n", info.name));
                 output.push_str(&format!("可执行文件: {:?}\n", info.exe_path));
                 output.push_str(&format!("可执行文件大小: {}\n", format_size(info.exe_size)));
-                output.push_str(&format!("PSS: {}\n", format_size(info.pss)));
-                output.push_str(&format!("RSS: {}\n", format_size(info.rss)));
+                output.push_str(&format!("PSS: {}\n", format_size(info.mem_info.pss)));
+                output.push_str(&format!("RSS: {}\n", format_size(info.mem_info.rss)));
                 output.push_str(&format!("共享内存: {}\n", format_size(info.shared_memory)));
-                output.push_str(&format!("打开文件数: {}\n", info.open_files_count));
+                output.push_str(&format!("打开文件数: {}\n", info.open_files.len()));
                 output.push_str("\n动态库信息:\n");
                 for lib in &info.libraries {
                     output.push_str(&format!("- {:?} ({})\n",
@@ -46,6 +46,192 @@ impl Collector {
 }
 
 impl Collector {
+    fn collect_process_memory_info(&self, pid: i32, executor: &mut LocalExecutor) -> Result<ProcessMemInfo> {
+        let mut mem_info = ProcessMemInfo {
+            pss: 0,
+            rss: 0,
+            private: 0,
+            shared: 0,
+            swap: 0,
+            cache: 0,
+            text_size: 0,
+            data_size: 0,
+        };
+
+        // 解析 /proc/[pid]/smaps 获取内存信息
+        if let Ok((smaps, _)) = executor.execute_sudo_command(&format!("cat /proc/{}/smaps 2>/dev/null", pid)) {
+            let mut text_pages = 0u64;
+            let mut data_pages = 0u64;
+            let mut in_text = false;
+            let mut in_data = false;
+
+            for line in smaps.lines() {
+                if line.contains(" r-xp ") {
+                    in_text = true;
+                    in_data = false;
+                } else if line.contains(" rw-p ") {
+                    in_text = false;
+                    in_data = true;
+                } else if line.starts_with("Size:") {
+                    let kb = line.split_whitespace()
+                        .nth(1)
+                        .unwrap_or("0")
+                        .parse::<u64>()
+                        .unwrap_or(0);
+                    if in_text {
+                        text_pages += kb;
+                    } else if in_data {
+                        data_pages += kb;
+                    }
+                } else if line.starts_with("Pss:") {
+                    let kb = line.split_whitespace()
+                        .nth(1)
+                        .unwrap_or("0")
+                        .parse::<u64>()
+                        .unwrap_or(0);
+                    mem_info.pss += kb * 1024;
+                } else if line.starts_with("Rss:") {
+                    let kb = line.split_whitespace()
+                        .nth(1)
+                        .unwrap_or("0")
+                        .parse::<u64>()
+                        .unwrap_or(0);
+                    mem_info.rss += kb * 1024;
+                } else if line.starts_with("Private_Clean:") || line.starts_with("Private_Dirty:") {
+                    let kb = line.split_whitespace()
+                        .nth(1)
+                        .unwrap_or("0")
+                        .parse::<u64>()
+                        .unwrap_or(0);
+                    mem_info.private += kb * 1024;
+                } else if line.starts_with("Shared_Clean:") || line.starts_with("Shared_Dirty:") {
+                    let kb = line.split_whitespace()
+                        .nth(1)
+                        .unwrap_or("0")
+                        .parse::<u64>()
+                        .unwrap_or(0);
+                    mem_info.shared += kb * 1024;
+                } else if line.starts_with("Swap:") {
+                    let kb = line.split_whitespace()
+                        .nth(1)
+                        .unwrap_or("0")
+                        .parse::<u64>()
+                        .unwrap_or(0);
+                    mem_info.swap += kb * 1024;
+                } else if line.starts_with("Referenced:") {
+                    let kb = line.split_whitespace()
+                        .nth(1)
+                        .unwrap_or("0")
+                        .parse::<u64>()
+                        .unwrap_or(0);
+                    mem_info.cache += kb * 1024;
+                }
+            }
+
+            mem_info.text_size = text_pages * 1024;
+            mem_info.data_size = data_pages * 1024;
+        }
+
+        Ok(mem_info)
+    }
+
+    fn collect_process_open_files(&self, pid: i32, executor: &mut LocalExecutor) -> Result<Vec<ProcessFile>> {
+        let mut files = Vec::new();
+
+        // 获取进程打开的文件列表
+        if let Ok((fd_list, _)) = executor.execute_sudo_command(&format!("ls -l /proc/{}/fd/ 2>/dev/null", pid)) {
+            for line in fd_list.lines() {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 9 {
+                    let access_mode = parts[0].to_string();
+                    let path = if let Some(target) = line.split(" -> ").nth(1) {
+                        PathBuf::from(target.trim())
+                    } else {
+                        continue;
+                    };
+
+                    let size = if let Ok((size_str, _)) = executor.execute_sudo_command(&format!("stat -c %s {:?} 2>/dev/null", path)) {
+                        size_str.trim().parse().unwrap_or(0)
+                    } else {
+                        0
+                    };
+
+                    let file_type = if path.to_string_lossy().starts_with("socket:") {
+                        "socket".to_string()
+                    } else if path.to_string_lossy().starts_with("pipe:") {
+                        "pipe".to_string()
+                    } else {
+                        "regular".to_string()
+                    };
+
+                    files.push(ProcessFile {
+                        path,
+                        size,
+                        access_mode,
+                        file_type,
+                    });
+                }
+            }
+        }
+
+        Ok(files)
+    }
+
+    fn collect_kernel_config(&self, executor: &mut LocalExecutor) -> Result<HashMap<String, String>> {
+        let mut config = HashMap::new();
+
+        // 尝试从/proc/config.gz获取编译选项
+        if let Ok((_, _)) = executor.execute_sudo_command("test -f /proc/config.gz") {
+            if let Ok((output, _)) = executor.execute_sudo_command("zcat /proc/config.gz") {
+                for line in output.lines() {
+                    if line.starts_with("CONFIG_") {
+                        if let Some((key, value)) = line.split_once('=') {
+                            config.insert(key.trim().to_string(), value.trim().to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        // 如果/proc/config.gz不存在，尝试从/boot/config-$(uname -r)获取
+        if config.is_empty() {
+            if let Ok((kernel_release, _)) = executor.execute_sudo_command("uname -r") {
+                let config_path = format!("/boot/config-{}", kernel_release.trim());
+                if let Ok((output, _)) = executor.execute_sudo_command(&format!("cat {}", config_path)) {
+                    for line in output.lines() {
+                        if line.starts_with("CONFIG_") {
+                            if let Some((key, value)) = line.split_once('=') {
+                                config.insert(key.trim().to_string(), value.trim().to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 如果还是找不到配置，则尝试使用modprobe读取当前加载的模块配置
+        if config.is_empty() {
+            if let Ok((modules, _)) = executor.execute_sudo_command("lsmod | tail -n +2 | awk '{print $1}'") {
+                for module in modules.lines() {
+                    if let Ok((info, _)) = executor.execute_sudo_command(&format!("modinfo {}", module.trim())) {
+                        for line in info.lines() {
+                            if line.starts_with("parm:") {
+                                if let Some((key, value)) = line[5..].split_once(':') {
+                                    config.insert(
+                                        format!("MODULE_{}_PARAM_{}", module.trim().to_uppercase(), key.trim()),
+                                        value.trim().to_string()
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(config)
+    }
+
     pub fn new(temp_dir: PathBuf, max_processes: Option<usize>) -> Self {
         Self {
             executor: Arc::new(Mutex::new(LocalExecutor::new())),
@@ -80,7 +266,7 @@ impl Collector {
 
         // 计算进程内存总和（使用PSS）
         system_info.processes_memory = processes.values()
-            .map(|p| p.pss)
+            .map(|p| p.mem_info.pss)
             .sum();
 
         // 计算内核占用的内存
@@ -300,11 +486,16 @@ impl Collector {
         }; // 释放executor锁
 
         // 解析内存信息
-        let (total_memory, used_memory) = parse_meminfo(&meminfo)
+        let (total_memory, used_memory, meminfo_map) = parse_meminfo(&meminfo)
             .context("Failed to parse meminfo")?;
 
         // 获取共享内存总量
         let total_shared_memory = self.collect_total_shared_memory()?;
+
+        // 获取内核编译选项
+        let mut executor = self.executor.lock().unwrap();
+        let kernel_config = self.collect_kernel_config(&mut executor)?;
+        drop(executor);
 
         Ok(SystemInfo {
             hostname,
@@ -322,6 +513,8 @@ impl Collector {
             skipped_processes: 0,   // 将在collect_processes中更新
             total_processes: 0,     // 将在collect_processes后更新
             collection_time: chrono::Utc::now(),
+            meminfo: meminfo_map,
+            kernel_config,
         })
     }
 
@@ -452,38 +645,14 @@ impl Collector {
             }
         };
 
-        // 收集内存信息 (PSS/RSS)，单位从KB转换为字节
-        let (mut pss, mut rss) = (0, 0);
-        if let Ok((smaps, _)) = executor.execute_sudo_command(
-            &format!("cat /proc/{}/smaps 2>/dev/null", pid)
-        ) {
-            for line in smaps.lines() {
-                if line.starts_with("Pss:") {
-                    let kb = line.split_whitespace()
-                        .nth(1)
-                        .unwrap_or("0")
-                        .parse::<u64>()
-                        .unwrap_or(0);
-                    pss += kb * 1024;  // KB转换为字节
-                } else if line.starts_with("Rss:") {
-                    let kb = line.split_whitespace()
-                        .nth(1)
-                        .unwrap_or("0")
-                        .parse::<u64>()
-                        .unwrap_or(0);
-                    rss += kb * 1024;  // KB转换为字节
-                }
-            }
-        }
+        // 收集内存信息
+        let mem_info = self.collect_process_memory_info(pid, executor)?;
 
         // 获取动态库信息
         let libraries = self.collect_process_libraries_parallel(pid, executor)?;
 
-        // 获取打开的文件数量
-        let (fd_count, _) = executor.execute_sudo_command(
-            &format!("ls -l /proc/{}/fd 2>/dev/null | wc -l", pid)
-        )?;
-        let open_files_count = fd_count.trim().parse().unwrap_or(0);
+        // 获取打开的文件
+        let open_files = self.collect_process_open_files(pid, executor)?;
 
         // 获取共享内存大小
         let shared_memory = self.collect_process_shared_memory_parallel(pid, executor)?;
@@ -494,10 +663,9 @@ impl Collector {
             exe_path,
             exe_size,
             is_kthread,
-            pss,
-            rss,
+            mem_info,
             shared_memory,
-            open_files_count,
+            open_files,
             libraries,
             user_id,
         })
@@ -586,20 +754,26 @@ impl Collector {
     }
 }
 
-fn parse_meminfo(content: &str) -> Result<(u64, u64)> {
+fn parse_meminfo(content: &str) -> Result<(u64, u64, HashMap<String, u64>)> {
     let mut total = 0;
     let mut available = 0;
+    let mut meminfo_map = HashMap::new();
 
     for line in content.lines() {
-        if line.starts_with("MemTotal:") {
-            if let Some(kb) = line.split_whitespace().nth(1) {
-                // 从 KB 转换为字节 (1KB = 1024B)
-                total = kb.parse::<u64>()? * 1024;
-            }
-        } else if line.starts_with("MemAvailable:") {
-            if let Some(kb) = line.split_whitespace().nth(1) {
-                // 从 KB 转换为字节 (1KB = 1024B)
-                available = kb.parse::<u64>()? * 1024;
+        if let Some(pos) = line.find(':') {
+            let key = line[..pos].trim().to_string();
+            if let Some(kb) = line[pos + 1..].trim().split_whitespace().next() {
+                if let Ok(bytes) = kb.parse::<u64>() {
+                    // 将 KB 转换为字节
+                    let bytes = bytes * 1024;
+                    meminfo_map.insert(key.clone(), bytes);
+
+                    if key == "MemTotal" {
+                        total = bytes;
+                    } else if key == "MemAvailable" {
+                        available = bytes;
+                    }
+                }
             }
         }
     }
@@ -608,7 +782,7 @@ fn parse_meminfo(content: &str) -> Result<(u64, u64)> {
         anyhow::bail!("MemTotal not found in /proc/meminfo");
     }
 
-    Ok((total, total - available))
+    Ok((total, total - available, meminfo_map))
 }
 
 fn format_size(bytes: u64) -> String {

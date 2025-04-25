@@ -3,16 +3,35 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ProcessMemInfo {
+    pub pss: u64,          // PSS (Proportional Set Size)
+    pub rss: u64,          // RSS (Resident Set Size)
+    pub private: u64,      // Private Memory
+    pub shared: u64,       // Shared Memory
+    pub swap: u64,         // Swap Usage
+    pub cache: u64,        // Cache Memory
+    pub text_size: u64,    // 代码段大小(.text)
+    pub data_size: u64,    // 数据段大小(.data + .bss)
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ProcessFile {
+    pub path: PathBuf,
+    pub size: u64,
+    pub access_mode: String, // 读/写/执行权限
+    pub file_type: String,   // 普通文件/socket/pipe等
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ProcessInfo {
     pub pid: i32,
     pub name: String,
     pub exe_path: PathBuf,
     pub exe_size: u64,
     pub is_kthread: bool,  // 用于标识内核线程
-    pub pss: u64,  // 优先使用 PSS
-    pub rss: u64,  // 备选使用 RSS
+    pub mem_info: ProcessMemInfo,
     pub shared_memory: u64,
-    pub open_files_count: usize,
+    pub open_files: Vec<ProcessFile>,
     pub libraries: Vec<LibraryInfo>,
     pub user_id: u32,  // 进程所属用户的ID
 }
@@ -57,6 +76,8 @@ pub struct SystemInfo {
     pub skipped_processes: usize,
     pub total_processes: usize,  // 系统中的总进程数
     pub collection_time: chrono::DateTime<chrono::Utc>,
+    pub meminfo: HashMap<String, u64>,  // /proc/meminfo 的所有字段
+    pub kernel_config: HashMap<String, String>, // 内核编译选项
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

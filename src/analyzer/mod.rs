@@ -182,10 +182,10 @@ impl Analyzer {
         new_proc: &ProcessInfo,
         diff: &mut MemoryDiff,
     ) -> Result<()> {
-        let memory_diff = if new_proc.pss > 0 && old_proc.pss > 0 {
-            new_proc.pss as i64 - old_proc.pss as i64
+        let memory_diff = if new_proc.mem_info.pss > 0 && old_proc.mem_info.pss > 0 {
+            new_proc.mem_info.pss as i64 - old_proc.mem_info.pss as i64
         } else {
-            new_proc.rss as i64 - old_proc.rss as i64
+            new_proc.mem_info.rss as i64 - old_proc.mem_info.rss as i64
         };
 
         let mut library_changes = Vec::new();
@@ -245,7 +245,7 @@ impl Analyzer {
             memory_diff,
             library_changes,
             exe_size_diff: new_proc.exe_size as i64 - old_proc.exe_size as i64,
-            open_files_diff: new_proc.open_files_count as i32 - old_proc.open_files_count as i32,
+            open_files_diff: new_proc.open_files.len() as i32 - old_proc.open_files.len() as i32,
             shared_memory_diff: new_proc.shared_memory as i64 - old_proc.shared_memory as i64,
         },);
 
