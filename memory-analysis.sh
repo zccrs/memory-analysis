@@ -72,27 +72,33 @@ fi
 
 # 清理函数
 cleanup() {
-    # 终止远程进程
-    if [ -n "$REMOTE_PID1" ]; then
-        ssh $SSH_OPTS1 "$REMOTE_HOST1" "sudo kill -TERM $REMOTE_PID1" 2>/dev/null
-    fi
-    # 清理远程临时目录
-    ssh $SSH_OPTS1 "$REMOTE_HOST1" "rm -rf $REMOTE_TEMP_DIR1" 2>/dev/null
-    # 关闭SSH主连接
-    ssh -O exit $SSH_OPTS1 "$REMOTE_HOST1" 2>/dev/null
-    # 删除控制socket
-    rm -f "$SSH_CONTROL_PATH1"
-
-    if [ -n "$REMOTE_HOST2" ]; then
+    # 检查主机1的SSH连接是否已建立
+    if [ -S "$SSH_CONTROL_PATH1" ]; then
         # 终止远程进程
-        if [ -n "$REMOTE_PID2" ]; then
-            ssh $SSH_OPTS2 "$REMOTE_HOST2" "sudo kill -TERM $REMOTE_PID2" 2>/dev/null
+        if [ -n "$REMOTE_PID1" ]; then
+            ssh $SSH_OPTS1 "$REMOTE_HOST1" "sudo kill -TERM $REMOTE_PID1" 2>/dev/null
         fi
         # 清理远程临时目录
-        ssh $SSH_OPTS2 "$REMOTE_HOST2" "rm -rf $REMOTE_TEMP_DIR2" 2>/dev/null
+        ssh $SSH_OPTS1 "$REMOTE_HOST1" "rm -rf $REMOTE_TEMP_DIR1" 2>/dev/null
         # 关闭SSH主连接
-        ssh -O exit $SSH_OPTS2 "$REMOTE_HOST2" 2>/dev/null
-        # 删除控制socket
+        ssh -O exit $SSH_OPTS1 "$REMOTE_HOST1" 2>/dev/null
+    fi
+    # 删除控制socket（无论连接是否建立都需要清理）
+    rm -f "$SSH_CONTROL_PATH1"
+
+    # 检查主机2的SSH连接是否已建立
+    if [ -n "$REMOTE_HOST2" ]; then
+        if [ -S "$SSH_CONTROL_PATH2" ]; then
+            # 终止远程进程
+            if [ -n "$REMOTE_PID2" ]; then
+                ssh $SSH_OPTS2 "$REMOTE_HOST2" "sudo kill -TERM $REMOTE_PID2" 2>/dev/null
+            fi
+            # 清理远程临时目录
+            ssh $SSH_OPTS2 "$REMOTE_HOST2" "rm -rf $REMOTE_TEMP_DIR2" 2>/dev/null
+            # 关闭SSH主连接
+            ssh -O exit $SSH_OPTS2 "$REMOTE_HOST2" 2>/dev/null
+        fi
+        # 删除控制socket（无论连接是否建立都需要清理）
         rm -f "$SSH_CONTROL_PATH2"
     fi
 
@@ -110,11 +116,20 @@ handle_interrupt() {
     # 终止正在运行的SSH进程
     if [ -n "$SSH_PID1" ]; then
         kill -TERM $SSH_PID1 2>/dev/null
+        wait $SSH_PID1 2>/dev/null
     fi
     if [ -n "$REMOTE_HOST2" ] && [ -n "$SSH_PID2" ]; then
         kill -TERM $SSH_PID2 2>/dev/null
+        wait $SSH_PID2 2>/dev/null
     fi
-    cleanup
+
+    # 只在SSH连接成功建立后才执行完整的清理操作
+    if [ -S "$SSH_CONTROL_PATH1" ] || [ -S "$SSH_CONTROL_PATH2" ]; then
+        cleanup
+    else
+        # SSH连接尚未建立，只需要恢复终端状态
+        stty sane 2>/dev/null || true
+    fi
     exit 1
 }
 
