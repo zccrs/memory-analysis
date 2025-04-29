@@ -94,12 +94,13 @@ fn handle_diff_command(_args: &Args, targets: Vec<PathBuf>) -> Result<()> {
     info!("生成分析报告...");
     let desc1 = targets[0].file_stem().and_then(|s| s.to_str()).unwrap_or("旧数据");
     let desc2 = targets[1].file_stem().and_then(|s| s.to_str()).unwrap_or("新数据");
-    let (json_path, md_path, csv_path) = Reporter::generate_report(&diff, &report_dir, desc1, desc2)?;
+    let (json_path, md_path, csv_path, html_path) = Reporter::generate_report(&diff, &report_dir, desc1, desc2)?;
 
     info!("分析完成！报告已保存到以下位置:");
     info!("- JSON报告: {}", json_path.display());
     info!("- 中文报告: {}", md_path.display());
     info!("- CSV报告: {}", csv_path.display());
+    info!("- HTML报告: {}", html_path.display());
 
     Ok(())
 }

@@ -8,8 +8,9 @@
 - 🔐 自动处理 sudo 权限
 - 📊 生成详细的中文分析报告
 - 🔍 分析多个内存变化因素
-- 📝 支持 JSON 和 Markdown 格式输出
+- 📝 支持 JSON、Markdown 和 HTML 格式输出
 - 💾 自动保存每次采集的数据供后续对比
+- 🌐 响应式设计的 HTML 报告，支持移动端查看
 
 ## 安装
 
@@ -160,6 +161,7 @@ memory-analysis --diff ./开始运行 ./运行24h
 #### 对比模式输出（保存在第二个目录）
 - `diff_report.json`: 差异分析的 JSON 格式报告
 - `diff_report_中文.md`: 中文 Markdown 格式的详细分析报告
+- `diff_report.html`: 响应式设计的 HTML 格式报告，支持在浏览器中查看
 
 ### 完整参数说明
 
@@ -212,6 +214,7 @@ RSS: 25.3 MB
 - `<DESC>.json`: 本次采集的原始数据
 - `diff_report.json`: 差异分析的 JSON 格式报告
 - `diff_report_中文.md`: 中文 Markdown 格式的详细分析报告
+- `diff_report.html`: HTML 格式报告，包含图表和交互式内容，方便在浏览器中查看
 
 ## 分析报告内容
 
